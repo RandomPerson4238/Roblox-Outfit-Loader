@@ -1,6 +1,7 @@
+
 -- R6 AVATAR CHANGER
 -- Accessory-first attachment with source weld preservation
--- Classic clothing + BodyColors + head mesh/texture
+-- Classic clothing + BodyColors + head mesh/texture + R6 CharacterMesh bundles
 -- Client-side appearance only
 -- No Moon Animator / Studio plugin dependencies
 
@@ -372,8 +373,6 @@ local function getOriginalBinding(sourceModel, sourceAccessory)
                     C0 = object.C0,
                     C1 = object.C1,
 
-                    -- Used as a safe fallback if the joint offsets
-                    -- cannot be applied for some reason.
                     relativeCFrame =
                         otherPart.CFrame:ToObjectSpace(handle.CFrame),
                 }
@@ -507,21 +506,17 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
         return false, "Accessory has no Handle"
     end
 
-    -- Read source weld data BEFORE the clone is created.
     local binding = getOriginalBinding(
         sourceModel,
         sourceAccessory
     )
 
-    -- Prefer the body part referenced by the original weld.
     local targetPart
 
     if binding then
         targetPart = getBodyPart(character, binding.bodyName)
     end
 
-    -- If the source weld is absent or cannot map to an R6 part,
-    -- try matching attachment names.
     if not targetPart then
         local attachmentBinding =
             findAttachmentBinding(sourceAccessory, character)
@@ -535,7 +530,6 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
         end
     end
 
-    -- Last-resort body-part mapping.
     if not targetPart then
         binding = findNearestBodyBinding(
             sourceModel,
@@ -554,7 +548,6 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
         return false, "Could not find an R6 attachment target"
     end
 
-    -- Clone only after reading the source joint references.
     local clone
 
     local cloneOK, cloneResult = pcall(function()
@@ -574,47 +567,31 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
     end
 
     prepareAccessoryClone(clone)
-
-    -- Parent the accessory locally.
     clone.Parent = character
 
-    -- Build a new weld to the mapped part on the player's R6 rig.
     local weld = Instance.new("Weld")
     weld.Name = "R6AccessoryWeld"
     weld.Part0 = targetPart
     weld.Part1 = handle
 
     if binding.kind == "Joint" then
-        -- Preserve the original C0/C1 orientation.
         if binding.handleWasPart0 then
-            -- Original:
-            -- Handle * C0 = SourceBody * C1
-            --
-            -- New:
-            -- TargetBody * C1 = Handle * C0
             weld.C0 = binding.C1
             weld.C1 = binding.C0
         else
-            -- Original:
-            -- SourceBody * C0 = Handle * C1
             weld.C0 = binding.C0
             weld.C1 = binding.C1
         end
 
     elseif binding.kind == "Attachment" then
-        -- Align the matching target and source attachments.
         weld.C0 = binding.targetAttachmentCFrame
         weld.C1 = binding.sourceAttachmentCFrame
 
     else
-        -- WeldConstraint or nearest-part fallback:
-        -- preserve the actual source body-part-to-handle offset.
         weld.C0 = binding.relativeCFrame
         weld.C1 = CFrame.new()
     end
 
-    -- Solve the Handle's position using the final weld equation:
-    -- Part0.CFrame * C0 = Part1.CFrame * C1
     local positioned, positionError = pcall(function()
         handle.CFrame =
             targetPart.CFrame
@@ -638,7 +615,78 @@ end
 -- HEAD MESH / TEXTURE
 --==================================================
 
+-- Keep a clean copy of the original target mesh so a source without a
+-- SpecialMesh/MeshPart does not leave a previous source avatar's head.
+local originalHeadMeshSnapshots = setmetatable({}, { __mode = "k" })
+
+local function captureOriginalHeadMesh(targetHead)
+    if originalHeadMeshSnapshots[targetHead] ~= nil then
+        return
+    end
+
+    local originalMesh = targetHead:FindFirstChildOfClass("SpecialMesh")
+    local snapshot = {
+        hadMesh = originalMesh ~= nil,
+        template = nil,
+    }
+
+    if originalMesh then
+        local ok, clone = pcall(function()
+            return originalMesh:Clone()
+        end)
+
+        if ok then
+            snapshot.template = clone
+        end
+    end
+
+    originalHeadMeshSnapshots[targetHead] = snapshot
+end
+
+local function restoreOriginalHeadMesh(targetHead)
+    local snapshot = originalHeadMeshSnapshots[targetHead]
+    if not snapshot then
+        return
+    end
+
+    for _, child in ipairs(targetHead:GetChildren()) do
+        if child:IsA("SpecialMesh") then
+            child:Destroy()
+        end
+    end
+
+    if snapshot.template then
+        local ok, clone = pcall(function()
+            return snapshot.template:Clone()
+        end)
+
+        if ok and clone then
+            clone.Parent = targetHead
+        end
+    end
+end
+
+local function copyPropertyIfAvailable(source, target, sourceProperty, targetProperty)
+    targetProperty = targetProperty or sourceProperty
+
+    local readOK, value = pcall(function()
+        return source[sourceProperty]
+    end)
+
+    if not readOK then
+        return false
+    end
+
+    local writeOK = pcall(function()
+        target[targetProperty] = value
+    end)
+
+    return writeOK
+end
+
 local function getOrCreateSpecialMesh(targetHead)
+    captureOriginalHeadMesh(targetHead)
+
     local mesh = targetHead:FindFirstChildOfClass("SpecialMesh")
 
     if not mesh then
@@ -652,58 +700,79 @@ local function getOrCreateSpecialMesh(targetHead)
 end
 
 local function copyHeadAppearance(sourceHead, targetHead)
-    if not sourceHead or not targetHead then
-        return false, "Head missing"
+    if not targetHead then
+        return false, "Target Head missing"
     end
 
-    -- Case A: Head contains a SpecialMesh.
+    if not sourceHead then
+        restoreOriginalHeadMesh(targetHead)
+        return false, "Source Head missing; restored original mesh"
+    end
+
+    -- Case A: source Head contains a SpecialMesh.
+    -- Copy mesh/texture data, but do not inherit its Scale.
     local sourceMesh = sourceHead:FindFirstChildOfClass("SpecialMesh")
 
     if sourceMesh then
         local targetMesh = getOrCreateSpecialMesh(targetHead)
 
-        for _, property in ipairs({
-            "MeshType",
-            "MeshId",
-            "TextureId",
-            "Scale",
-            "Offset",
-            "VertexColor",
-        }) do
-            pcall(function()
-                targetMesh[property] = sourceMesh[property]
-            end)
+        copyPropertyIfAvailable(sourceMesh, targetMesh, "MeshType")
+
+        local meshContentCopied =
+            copyPropertyIfAvailable(sourceMesh, targetMesh, "MeshContent")
+        if not meshContentCopied then
+            copyPropertyIfAvailable(sourceMesh, targetMesh, "MeshId")
         end
 
-        return true, "SpecialMesh copied"
+        local textureContentCopied =
+            copyPropertyIfAvailable(sourceMesh, targetMesh, "TextureContent")
+        if not textureContentCopied then
+            copyPropertyIfAvailable(sourceMesh, targetMesh, "TextureId")
+        end
+
+        copyPropertyIfAvailable(sourceMesh, targetMesh, "Offset")
+        copyPropertyIfAvailable(sourceMesh, targetMesh, "VertexColor")
+
+        -- No size-ratio calculation; use the planned neutral scale.
+        targetMesh.Scale = Vector3.new(1, 1, 1)
+
+        return true, "SpecialMesh mesh/texture copied"
     end
 
-    -- Case B: Head itself is a MeshPart.
+    -- Case B: source Head itself is a MeshPart.
+    -- This copies a static mesh and texture, not dynamic facial deformation.
     if sourceHead:IsA("MeshPart") then
         local targetMesh = getOrCreateSpecialMesh(targetHead)
 
         local ok, err = pcall(function()
             targetMesh.MeshType = Enum.MeshType.FileMesh
-            targetMesh.MeshId = sourceHead.MeshId
-            targetMesh.TextureId = sourceHead.TextureID
 
-            local sourceSize = sourceHead.Size
-            local targetSize = targetHead.Size
+            local meshContentCopied =
+                copyPropertyIfAvailable(sourceHead, targetMesh, "MeshContent")
+            if not meshContentCopied then
+                copyPropertyIfAvailable(sourceHead, targetMesh, "MeshId")
+            end
 
-            targetMesh.Scale = Vector3.new(
-                sourceSize.X / math.max(targetSize.X, 0.001),
-                sourceSize.Y / math.max(targetSize.Y, 0.001),
-                sourceSize.Z / math.max(targetSize.Z, 0.001)
-            )
+            local textureContentCopied =
+                copyPropertyIfAvailable(sourceHead, targetMesh, "TextureContent")
+            if not textureContentCopied then
+                copyPropertyIfAvailable(sourceHead, targetMesh, "TextureID", "TextureId")
+            end
+
+            targetMesh.Offset = Vector3.new(0, 0, 0)
+            targetMesh.VertexColor = Vector3.new(1, 1, 1)
+            targetMesh.Scale = Vector3.new(1, 1, 1)
         end)
 
         if not ok then
-            return false, "MeshPart transfer failed: "
-                .. tostring(err)
+            return false, "MeshPart transfer failed: " .. tostring(err)
         end
 
-        return true, "MeshPart copied; scale is approximate"
+        return true, "MeshPart mesh/texture copied (static)"
     end
+
+    -- If the new source has no supported mesh, do not keep the previous one.
+    restoreOriginalHeadMesh(targetHead)
 
     return false, "Source Head has no SpecialMesh or MeshPart"
 end
@@ -724,23 +793,25 @@ local function copyClassicAppearance(source, character)
         end
     end
 
-    -- Remove old classic clothing and body colors.
+    -- Remove old classic clothing, body colors, and every old CharacterMesh.
     for _, object in ipairs(character:GetChildren()) do
         if object:IsA("Shirt")
             or object:IsA("Pants")
             or object:IsA("ShirtGraphic")
-            or object:IsA("BodyColors") then
+            or object:IsA("BodyColors")
+            or object:IsA("CharacterMesh") then
 
             object:Destroy()
         end
     end
 
-    -- Copy classic clothing and BodyColors.
+    -- Copy classic clothing, BodyColors, and the complete source CharacterMesh set.
     for _, object in ipairs(source:GetChildren()) do
         if object:IsA("Shirt")
             or object:IsA("Pants")
             or object:IsA("ShirtGraphic")
-            or object:IsA("BodyColors") then
+            or object:IsA("BodyColors")
+            or object:IsA("CharacterMesh") then
 
             local ok, clone = pcall(function()
                 return object:Clone()
