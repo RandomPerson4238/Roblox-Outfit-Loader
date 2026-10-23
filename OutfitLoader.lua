@@ -734,7 +734,7 @@ local function copyHeadAppearance(sourceHead, targetHead)
         copyPropertyIfAvailable(sourceMesh, targetMesh, "VertexColor")
 
         -- No size-ratio calculation; use the planned neutral scale.
-        targetMesh.Scale = Vector3.new(1, 1, 1)
+        targetMesh.Scale = Vector3.new(0.95, 0.95, 0.95)
 
         return true, "SpecialMesh mesh/texture copied"
     end
