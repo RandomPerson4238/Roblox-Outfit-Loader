@@ -1,4 +1,3 @@
-
 -- R6 AVATAR CHANGER
 -- Accessory-first attachment with source weld preservation
 -- Classic clothing + BodyColors + head mesh/texture + R6 CharacterMesh bundles
@@ -211,12 +210,10 @@ end
 local function updateRespawnButton()
     if applyOnRespawn then
         respawnButton.Text = "Apply When Respawn: ON"
-        respawnButton.BackgroundColor3 =
-            Color3.fromRGB(50, 135, 90)
+        respawnButton.BackgroundColor3 = Color3.fromRGB(50, 135, 90)
     else
         respawnButton.Text = "Apply When Respawn: OFF"
-        respawnButton.BackgroundColor3 =
-            Color3.fromRGB(65, 65, 78)
+        respawnButton.BackgroundColor3 = Color3.fromRGB(65, 65, 78)
     end
 end
 
@@ -231,20 +228,23 @@ end)
 updateRespawnButton()
 
 --==================================================
--- R6 HELPERS
+-- R6 CHARACTER HELPERS
 --==================================================
 
-local function getR6Character()
-    local character = LocalPlayer.Character
-    if not character then
+local function inspectR6Model(model)
+    if not model or not model:IsA("Model") then
         return nil
     end
 
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    local head = character:FindFirstChild("Head")
-    local torso = character:FindFirstChild("Torso")
+    local humanoid = model:FindFirstChildOfClass("Humanoid")
+    local head = model:FindFirstChild("Head")
+    local torso = model:FindFirstChild("Torso")
 
     if not humanoid or not head or not torso then
+        return nil
+    end
+
+    if not head:IsA("BasePart") or not torso:IsA("BasePart") then
         return nil
     end
 
@@ -252,26 +252,55 @@ local function getR6Character()
         return nil
     end
 
-    return character, head, humanoid
+    return model, head, humanoid
 end
 
-local function getHandle(accessory)
-    local handle = accessory:FindFirstChild("Handle")
+local function getR6Character()
+    local characterRoot = LocalPlayer.Character
+    if not characterRoot then
+        return nil
+    end
 
-    if handle and handle:IsA("BasePart") then
-        return handle
+    -- If the assigned character itself is R15, do not select
+    -- an unrelated R6 model that happens to be nested inside it.
+    local rootHumanoid = characterRoot:FindFirstChildOfClass("Humanoid")
+    if rootHumanoid and rootHumanoid.RigType ~= Enum.HumanoidRigType.R6 then
+        return nil
+    end
+
+    -- Typical case: LocalPlayer.Character is the rig itself.
+    local model, head, humanoid = inspectR6Model(characterRoot)
+    if model then
+        return model, head, humanoid
+    end
+
+    -- Support games that wrap the actual rig in nested Models/Folders,
+    -- provided the wrapper is still LocalPlayer.Character.
+    for _, descendant in ipairs(characterRoot:GetDescendants()) do
+        if descendant:IsA("Model") then
+            model, head, humanoid = inspectR6Model(descendant)
+            if model then
+                return model, head, humanoid
+            end
+        end
     end
 
     return nil
 end
 
+local function getHandle(accessory)
+    local handle = accessory:FindFirstChild("Handle")
+    if handle and handle:IsA("BasePart") then
+        return handle
+    end
+    return nil
+end
+
 local function getBodyPart(model, name)
     local part = model:FindFirstChild(name)
-
     if part and part:IsA("BasePart") then
         return part
     end
-
     return nil
 end
 
@@ -279,18 +308,14 @@ end
 local function findBodyAttachment(character, attachmentName)
     for _, partName in ipairs(BODY_PART_NAMES) do
         local part = getBodyPart(character, partName)
-
         if part then
             for _, object in ipairs(part:GetDescendants()) do
-                if object:IsA("Attachment")
-                    and object.Name == attachmentName then
-
+                if object:IsA("Attachment") and object.Name == attachmentName then
                     return object, part
                 end
             end
         end
     end
-
     return nil, nil
 end
 
@@ -314,7 +339,6 @@ for _, name in ipairs({
     local ok, accessoryType = pcall(function()
         return Enum.AccessoryType[name]
     end)
-
     if ok and accessoryType then
         layeredTypes[accessoryType] = true
     end
@@ -324,7 +348,6 @@ local function isLayeredClothing(accessory)
     local ok, accessoryType = pcall(function()
         return accessory.AccessoryType
     end)
-
     return ok and layeredTypes[accessoryType] == true
 end
 
@@ -332,24 +355,18 @@ end
 -- CAPTURE ORIGINAL SOURCE WELD
 --==================================================
 
--- IMPORTANT:
--- Read the original accessory BEFORE cloning it.
--- Cloning an accessory separately may lose the joint's
--- references to the body part in the source character.
-
+-- Read the original accessory BEFORE cloning it. Cloning an accessory
+-- separately may lose references from its joint to the source body part.
 local function getOriginalBinding(sourceModel, sourceAccessory)
     local handle = getHandle(sourceAccessory)
-
     if not handle then
         return nil
     end
 
     for _, object in ipairs(sourceAccessory:GetDescendants()) do
-        -- Weld, Motor6D and other JointInstance types
         if object:IsA("JointInstance") then
             local part0 = object.Part0
             local part1 = object.Part1
-
             local otherPart
             local handleWasPart0 = false
 
@@ -365,24 +382,18 @@ local function getOriginalBinding(sourceModel, sourceAccessory)
                 and otherPart:IsA("BasePart")
                 and otherPart:IsDescendantOf(sourceModel)
                 and not otherPart:IsDescendantOf(sourceAccessory) then
-
                 return {
                     kind = "Joint",
                     bodyName = otherPart.Name,
                     handleWasPart0 = handleWasPart0,
                     C0 = object.C0,
                     C1 = object.C1,
-
-                    relativeCFrame =
-                        otherPart.CFrame:ToObjectSpace(handle.CFrame),
+                    relativeCFrame = otherPart.CFrame:ToObjectSpace(handle.CFrame),
                 }
             end
-
-        -- WeldConstraint does not contain C0/C1.
         elseif object:IsA("WeldConstraint") then
             local part0 = object.Part0
             local part1 = object.Part1
-
             local otherPart
 
             if part0 == handle and part1 ~= handle then
@@ -395,12 +406,10 @@ local function getOriginalBinding(sourceModel, sourceAccessory)
                 and otherPart:IsA("BasePart")
                 and otherPart:IsDescendantOf(sourceModel)
                 and not otherPart:IsDescendantOf(sourceAccessory) then
-
                 return {
                     kind = "Relative",
                     bodyName = otherPart.Name,
-                    relativeCFrame =
-                        otherPart.CFrame:ToObjectSpace(handle.CFrame),
+                    relativeCFrame = otherPart.CFrame:ToObjectSpace(handle.CFrame),
                 }
             end
         end
@@ -421,9 +430,7 @@ local function findAttachmentBinding(sourceAccessory, character)
 
     for _, object in ipairs(handle:GetDescendants()) do
         if object:IsA("Attachment") then
-            local targetAttachment, targetPart =
-                findBodyAttachment(character, object.Name)
-
+            local targetAttachment, targetPart = findBodyAttachment(character, object.Name)
             if targetAttachment and targetPart then
                 return {
                     kind = "Attachment",
@@ -438,8 +445,7 @@ local function findAttachmentBinding(sourceAccessory, character)
     return nil
 end
 
--- Last resort for accessories without a usable weld
--- or a matching attachment.
+-- Last resort for accessories without a usable weld or matching attachment.
 local function findNearestBodyBinding(sourceModel, sourceAccessory)
     local handle = getHandle(sourceAccessory)
     if not handle then
@@ -451,11 +457,8 @@ local function findNearestBodyBinding(sourceModel, sourceAccessory)
 
     for _, partName in ipairs(BODY_PART_NAMES) do
         local part = getBodyPart(sourceModel, partName)
-
         if part then
-            local distance =
-                (part.Position - handle.Position).Magnitude
-
+            local distance = (part.Position - handle.Position).Magnitude
             if distance < nearestDistance then
                 nearestDistance = distance
                 nearestPart = part
@@ -470,8 +473,7 @@ local function findNearestBodyBinding(sourceModel, sourceAccessory)
     return {
         kind = "Relative",
         bodyName = nearestPart.Name,
-        relativeCFrame =
-            nearestPart.CFrame:ToObjectSpace(handle.CFrame),
+        relativeCFrame = nearestPart.CFrame:ToObjectSpace(handle.CFrame),
     }
 end
 
@@ -481,11 +483,8 @@ end
 
 local function prepareAccessoryClone(accessory)
     for _, object in ipairs(accessory:GetDescendants()) do
-        if object:IsA("JointInstance")
-            or object:IsA("WeldConstraint") then
-
+        if object:IsA("JointInstance") or object:IsA("WeldConstraint") then
             object:Destroy()
-
         elseif object:IsA("BasePart") then
             object.Anchored = false
             object.CanCollide = false
@@ -506,11 +505,7 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
         return false, "Accessory has no Handle"
     end
 
-    local binding = getOriginalBinding(
-        sourceModel,
-        sourceAccessory
-    )
-
+    local binding = getOriginalBinding(sourceModel, sourceAccessory)
     local targetPart
 
     if binding then
@@ -518,29 +513,17 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
     end
 
     if not targetPart then
-        local attachmentBinding =
-            findAttachmentBinding(sourceAccessory, character)
-
+        local attachmentBinding = findAttachmentBinding(sourceAccessory, character)
         if attachmentBinding then
             binding = attachmentBinding
-            targetPart = getBodyPart(
-                character,
-                attachmentBinding.bodyName
-            )
+            targetPart = getBodyPart(character, attachmentBinding.bodyName)
         end
     end
 
     if not targetPart then
-        binding = findNearestBodyBinding(
-            sourceModel,
-            sourceAccessory
-        )
-
+        binding = findNearestBodyBinding(sourceModel, sourceAccessory)
         if binding then
-            targetPart = getBodyPart(
-                character,
-                binding.bodyName
-            )
+            targetPart = getBodyPart(character, binding.bodyName)
         end
     end
 
@@ -548,17 +531,12 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
         return false, "Could not find an R6 attachment target"
     end
 
-    local clone
-
-    local cloneOK, cloneResult = pcall(function()
+    local cloneOK, clone = pcall(function()
         return sourceAccessory:Clone()
     end)
-
-    if not cloneOK or not cloneResult then
+    if not cloneOK or not clone then
         return false, "Accessory clone failed"
     end
-
-    clone = cloneResult
 
     local handle = getHandle(clone)
     if not handle then
@@ -582,32 +560,25 @@ local function weldAccessory(sourceModel, character, sourceAccessory)
             weld.C0 = binding.C0
             weld.C1 = binding.C1
         end
-
     elseif binding.kind == "Attachment" then
         weld.C0 = binding.targetAttachmentCFrame
         weld.C1 = binding.sourceAttachmentCFrame
-
     else
         weld.C0 = binding.relativeCFrame
         weld.C1 = CFrame.new()
     end
 
     local positioned, positionError = pcall(function()
-        handle.CFrame =
-            targetPart.CFrame
-            * weld.C0
-            * weld.C1:Inverse()
+        handle.CFrame = targetPart.CFrame * weld.C0 * weld.C1:Inverse()
     end)
 
     if not positioned then
         clone:Destroy()
         weld:Destroy()
-        return false, "Could not position Handle: "
-            .. tostring(positionError)
+        return false, "Could not position Handle: " .. tostring(positionError)
     end
 
     weld.Parent = handle
-
     return true
 end
 
@@ -615,8 +586,8 @@ end
 -- HEAD MESH / TEXTURE
 --==================================================
 
--- Keep a clean copy of the original target mesh so a source without a
--- SpecialMesh/MeshPart does not leave a previous source avatar's head.
+-- Keep a clean copy of the target's original head mesh so a source without
+-- a supported mesh does not leave a previous source avatar's head behind.
 local originalHeadMeshSnapshots = setmetatable({}, { __mode = "k" })
 
 local function captureOriginalHeadMesh(targetHead)
@@ -634,7 +605,6 @@ local function captureOriginalHeadMesh(targetHead)
         local ok, clone = pcall(function()
             return originalMesh:Clone()
         end)
-
         if ok then
             snapshot.template = clone
         end
@@ -659,7 +629,6 @@ local function restoreOriginalHeadMesh(targetHead)
         local ok, clone = pcall(function()
             return snapshot.template:Clone()
         end)
-
         if ok and clone then
             clone.Parent = targetHead
         end
@@ -672,7 +641,6 @@ local function copyPropertyIfAvailable(source, target, sourceProperty, targetPro
     local readOK, value = pcall(function()
         return source[sourceProperty]
     end)
-
     if not readOK then
         return false
     end
@@ -680,7 +648,6 @@ local function copyPropertyIfAvailable(source, target, sourceProperty, targetPro
     local writeOK = pcall(function()
         target[targetProperty] = value
     end)
-
     return writeOK
 end
 
@@ -688,7 +655,6 @@ local function getOrCreateSpecialMesh(targetHead)
     captureOriginalHeadMesh(targetHead)
 
     local mesh = targetHead:FindFirstChildOfClass("SpecialMesh")
-
     if not mesh then
         mesh = Instance.new("SpecialMesh")
         mesh.Name = "AvatarCopiedSpecialMesh"
@@ -709,23 +675,24 @@ local function copyHeadAppearance(sourceHead, targetHead)
         return false, "Source Head missing; restored original mesh"
     end
 
-    -- Case A: source Head contains a SpecialMesh.
-    -- Copy mesh/texture data, but do not inherit its Scale.
+    -- Case A: source Head contains SpecialMesh. Preserve its mesh/texture
+    -- data while using the user-tested scale of 0.945 on all axes.
     local sourceMesh = sourceHead:FindFirstChildOfClass("SpecialMesh")
-
     if sourceMesh then
         local targetMesh = getOrCreateSpecialMesh(targetHead)
 
         copyPropertyIfAvailable(sourceMesh, targetMesh, "MeshType")
 
-        local meshContentCopied =
-            copyPropertyIfAvailable(sourceMesh, targetMesh, "MeshContent")
+        local meshContentCopied = copyPropertyIfAvailable(
+            sourceMesh, targetMesh, "MeshContent"
+        )
         if not meshContentCopied then
             copyPropertyIfAvailable(sourceMesh, targetMesh, "MeshId")
         end
 
-        local textureContentCopied =
-            copyPropertyIfAvailable(sourceMesh, targetMesh, "TextureContent")
+        local textureContentCopied = copyPropertyIfAvailable(
+            sourceMesh, targetMesh, "TextureContent"
+        )
         if not textureContentCopied then
             copyPropertyIfAvailable(sourceMesh, targetMesh, "TextureId")
         end
@@ -733,47 +700,47 @@ local function copyHeadAppearance(sourceHead, targetHead)
         copyPropertyIfAvailable(sourceMesh, targetMesh, "Offset")
         copyPropertyIfAvailable(sourceMesh, targetMesh, "VertexColor")
 
-        -- No size-ratio calculation; use the planned neutral scale.
-        targetMesh.Scale = Vector3.new(0.95, 0.95, 0.95)
-
-        return true, "SpecialMesh mesh/texture copied"
+        targetMesh.Scale = Vector3.new(0.945, 0.945, 0.945)
+        return true, "SpecialMesh copied (Scale 0.945)"
     end
 
-    -- Case B: source Head itself is a MeshPart.
-    -- This copies a static mesh and texture, not dynamic facial deformation.
+    -- Case B: source Head itself is a MeshPart. This produces a static
+    -- mesh/texture transfer; it cannot preserve dynamic facial deformation.
     if sourceHead:IsA("MeshPart") then
         local targetMesh = getOrCreateSpecialMesh(targetHead)
 
         local ok, err = pcall(function()
             targetMesh.MeshType = Enum.MeshType.FileMesh
 
-            local meshContentCopied =
-                copyPropertyIfAvailable(sourceHead, targetMesh, "MeshContent")
+            local meshContentCopied = copyPropertyIfAvailable(
+                sourceHead, targetMesh, "MeshContent"
+            )
             if not meshContentCopied then
                 copyPropertyIfAvailable(sourceHead, targetMesh, "MeshId")
             end
 
-            local textureContentCopied =
-                copyPropertyIfAvailable(sourceHead, targetMesh, "TextureContent")
+            local textureContentCopied = copyPropertyIfAvailable(
+                sourceHead, targetMesh, "TextureContent"
+            )
             if not textureContentCopied then
                 copyPropertyIfAvailable(sourceHead, targetMesh, "TextureID", "TextureId")
             end
 
             targetMesh.Offset = Vector3.new(0, 0, 0)
             targetMesh.VertexColor = Vector3.new(1, 1, 1)
-            targetMesh.Scale = Vector3.new(1, 1, 1)
+            targetMesh.Scale = Vector3.new(0.945, 0.945, 0.945)
         end)
 
         if not ok then
             return false, "MeshPart transfer failed: " .. tostring(err)
         end
 
-        return true, "MeshPart mesh/texture copied (static)"
+        return true, "MeshPart copied as static mesh (Scale 0.945)"
     end
 
-    -- If the new source has no supported mesh, do not keep the previous one.
+    -- If this source lacks a supported mesh, do not keep the previous
+    -- target avatar's mesh active.
     restoreOriginalHeadMesh(targetHead)
-
     return false, "Source Head has no SpecialMesh or MeshPart"
 end
 
@@ -786,73 +753,109 @@ local function copyClassicAppearance(source, character)
     local skipped = 0
     local notes = {}
 
-    -- Remove accessories from the previous applied avatar.
+    -- Remove accessories from the previously applied avatar.
     for _, object in ipairs(character:GetChildren()) do
         if object:IsA("Accessory") then
             object:Destroy()
         end
     end
 
-    -- Remove old classic clothing, body colors, and every old CharacterMesh.
+    -- Remove old classic clothing and BodyColors.
     for _, object in ipairs(character:GetChildren()) do
         if object:IsA("Shirt")
             or object:IsA("Pants")
             or object:IsA("ShirtGraphic")
-            or object:IsA("BodyColors")
-            or object:IsA("CharacterMesh") then
-
+            or object:IsA("BodyColors") then
             object:Destroy()
         end
     end
 
-    -- Copy classic clothing, BodyColors, and the complete source CharacterMesh set.
-    for _, object in ipairs(source:GetChildren()) do
+    -- Remove ALL previous CharacterMesh instances. Do not restore them if
+    -- the new source contains zero CharacterMesh instances.
+    for _, object in ipairs(character:GetDescendants()) do
+        if object:IsA("CharacterMesh") then
+            object:Destroy()
+        end
+    end
+
+    -- Copy classic clothing and BodyColors from the source model.
+    for _, object in ipairs(source:GetDescendants()) do
         if object:IsA("Shirt")
             or object:IsA("Pants")
             or object:IsA("ShirtGraphic")
-            or object:IsA("BodyColors")
-            or object:IsA("CharacterMesh") then
-
+            or object:IsA("BodyColors") then
+            -- These appearance objects should be direct children of the
+            -- target character, even if unusual source nesting is present.
             local ok, clone = pcall(function()
                 return object:Clone()
             end)
-
             if ok and clone then
                 clone.Parent = character
                 copied += 1
+            else
+                skipped += 1
             end
         end
     end
 
-    -- Copy source head mesh / texture.
-    local sourceHead = source:FindFirstChild("Head")
-    local targetHead = character:FindFirstChild("Head")
+    -- Clone exactly the source's CharacterMesh set. Searching descendants
+    -- supports source models that contain an unusual nested rig/container.
+    local sourceCharacterMeshes = {}
+    for _, object in ipairs(source:GetDescendants()) do
+        if object:IsA("CharacterMesh") then
+            table.insert(sourceCharacterMeshes, object)
+        end
+    end
 
-    local _, headMessage = copyHeadAppearance(
-        sourceHead,
-        targetHead
-    )
+    local characterMeshesCopied = 0
+    for _, object in ipairs(sourceCharacterMeshes) do
+        local ok, clone = pcall(function()
+            return object:Clone()
+        end)
+        if ok and clone then
+            clone.Parent = character
+            characterMeshesCopied += 1
+            copied += 1
+        else
+            skipped += 1
+        end
+    end
 
+    table.insert(notes, "CharacterMesh=" .. tostring(characterMeshesCopied))
+
+    -- Copy source head mesh/texture.
+    local sourceHead = source:FindFirstChild("Head", true)
+    local targetHead = character:FindFirstChild("Head", true)
+    local _, headMessage = copyHeadAppearance(sourceHead, targetHead)
     table.insert(notes, headMessage)
 
     -- Copy accessories using original source weld data.
-    for _, object in ipairs(source:GetChildren()) do
+    for _, object in ipairs(source:GetDescendants()) do
         if object:IsA("Accessory") then
-            if isLayeredClothing(object) then
-                skipped += 1
-            else
-                local ok, result = pcall(function()
-                    return weldAccessory(
-                        source,
-                        character,
-                        object
-                    )
-                end)
+            -- Only copy accessories belonging to the source model, not an
+            -- accessory nested inside another accessory/model's hierarchy.
+            local parentAccessory = object.Parent
+            local nestedInsideAccessory = false
+            while parentAccessory and parentAccessory ~= source do
+                if parentAccessory:IsA("Accessory") then
+                    nestedInsideAccessory = true
+                    break
+                end
+                parentAccessory = parentAccessory.Parent
+            end
 
-                if ok and result == true then
-                    copied += 1
-                else
+            if not nestedInsideAccessory then
+                if isLayeredClothing(object) then
                     skipped += 1
+                else
+                    local ok, result = pcall(function()
+                        return weldAccessory(source, character, object)
+                    end)
+                    if ok and result == true then
+                        copied += 1
+                    else
+                        skipped += 1
+                    end
                 end
             end
         end
@@ -884,32 +887,49 @@ local function applyAvatar(username)
     setStatus("Loading avatar...")
 
     local sourceModel
+    local sourceDescription
 
     local ok, err = pcall(function()
-        local character = getR6Character()
-
-        if not character then
+        if not getR6Character() then
             error("Your character must be R6 and fully loaded.")
         end
 
         local userId = Players:GetUserIdFromNameAsync(username)
 
-        sourceModel = Players:CreateHumanoidModelFromUserId(
-            userId,
+        -- Fetch the avatar description first, then explicitly create R6.
+        -- CreateHumanoidModelFromUserId does not take a rig-type argument.
+        sourceDescription = Players:GetHumanoidDescriptionFromUserIdAsync(userId)
+        if not sourceDescription then
+            error("Could not load the target avatar description.")
+        end
+
+        sourceModel = Players:CreateHumanoidModelFromDescriptionAsync(
+            sourceDescription,
             Enum.HumanoidRigType.R6
         )
 
         if not sourceModel then
-            error("Could not create the source avatar model.")
+            error("Could not create the source R6 avatar model.")
         end
 
-        local copied, skipped, notes =
-            copyClassicAppearance(sourceModel, character)
+        local sourceHumanoid = sourceModel:FindFirstChildOfClass("Humanoid")
+        if not sourceHumanoid or sourceHumanoid.RigType ~= Enum.HumanoidRigType.R6 then
+            error("The source model was not created as R6; current appearance was not changed.")
+        end
+
+        -- Re-resolve after web/API calls because the player may have respawned.
+        local character = getR6Character()
+        if not character then
+            error("Your R6 character is no longer available.")
+        end
+
+        local copied, skipped, notes = copyClassicAppearance(sourceModel, character)
 
         setStatus(
             "Copied " .. tostring(copied)
             .. " | Skipped " .. tostring(skipped)
-            .. " | Head: " .. tostring(notes[1])
+            .. " | " .. tostring(notes[1])
+            .. " | Head: " .. tostring(notes[2])
         )
     end)
 
@@ -919,12 +939,17 @@ local function applyAvatar(username)
         end)
     end
 
+    if sourceDescription then
+        pcall(function()
+            sourceDescription:Destroy()
+        end)
+    end
+
     if not ok then
         setStatus("Error: " .. tostring(err))
     end
 
     applying = false
-
     if applyButton and applyButton.Parent then
         applyButton.Text = "Apply Avatar"
     end
@@ -942,7 +967,6 @@ end)
 respawnButton.MouseButton1Click:Connect(function()
     applyOnRespawn = not applyOnRespawn
     lastUsername = input.Text
-
     updateRespawnButton()
 
     if applyOnRespawn then
