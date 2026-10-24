@@ -1,393 +1,621 @@
--- R15 AVATAR CHANGER: adapted from the R6 edition; local/client-side only.
--- Copies body-part mesh geometry/attachments, colors, classic clothing, and rigid accessories.
--- Layered clothing is skipped. No Studio/Moon Animator dependency.
+-- R15 AVATAR CHANGER - CLIENT-SIDE WELD OVERLAY
+-- Player rig and all Motor6Ds remain untouched.
+-- Workflow: create overlay -> parent -> weld all matching R15 parts
+-- -> disable overlay collisions -> hide original character locally.
+
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
+
 local GUI_NAME = "AvatarChangerUI_R15"
-local applying, applyOnRespawn, lastUsername = false, false, ""
+local OVERLAY_NAME = "LocalR15AvatarOverlay"
+
+local applying = false
+local applyOnRespawn = false
+local lastUsername = ""
 local respawnConnection
+
+local activeOverlay = nil
+local hiddenOriginals = {}
+
 local BODY_PART_NAMES = {
-    "Head", "UpperTorso", "LowerTorso",
-    "LeftUpperArm", "LeftLowerArm", "LeftHand",
-    "RightUpperArm", "RightLowerArm", "RightHand",
-    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
-    "RightUpperLeg", "RightLowerLeg", "RightFoot",
+    "HumanoidRootPart",
+
+    "Head",
+    "UpperTorso",
+    "LowerTorso",
+
+    "LeftUpperArm",
+    "LeftLowerArm",
+    "LeftHand",
+
+    "RightUpperArm",
+    "RightLowerArm",
+    "RightHand",
+
+    "LeftUpperLeg",
+    "LeftLowerLeg",
+    "LeftFoot",
+
+    "RightUpperLeg",
+    "RightLowerLeg",
+    "RightFoot",
 }
 
--- GUI helpers
+--==================================================
+-- GUI
+--==================================================
+
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
-if oldGui then oldGui:Destroy() end
+if oldGui then
+    oldGui:Destroy()
+end
+
 local gui = Instance.new("ScreenGui")
-gui.Name, gui.ResetOnSpawn, gui.DisplayOrder, gui.Parent = GUI_NAME, false, 999, playerGui
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+gui.Parent = playerGui
+
 local function make(className, name, size, position, parent, props)
-    local obj = Instance.new(className)
-    obj.Name, obj.Size, obj.Position, obj.Parent = name, size, position, parent
-    for key, value in pairs(props or {}) do obj[key] = value end
-    return obj
+    local object = Instance.new(className)
+
+    object.Name = name
+    object.Size = size
+    object.Position = position
+    object.Parent = parent
+
+    for key, value in pairs(props or {}) do
+        object[key] = value
+    end
+
+    return object
 end
-local function round(obj, radius)
-    local c = Instance.new("UICorner")
-    c.CornerRadius, c.Parent = UDim.new(0, radius), obj
+
+local function round(object, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, radius)
+    corner.Parent = object
 end
-local frame = make("Frame", "MainWindow", UDim2.fromOffset(300, 190), UDim2.new(.5, -150, .5, -95), gui, {
-    BackgroundColor3 = Color3.fromRGB(28,28,36), BorderSizePixel = 0, Active = true, Draggable = true, ZIndex = 10,
-})
+
+local frame = make(
+    "Frame",
+    "MainWindow",
+    UDim2.fromOffset(300, 190),
+    UDim2.new(0.5, -150, 0.5, -95),
+    gui,
+    {
+        BackgroundColor3 = Color3.fromRGB(28, 28, 36),
+        BorderSizePixel = 0,
+        Active = true,
+        Draggable = true,
+        ZIndex = 10,
+    }
+)
+
 round(frame, 10)
+
 local frameStroke = Instance.new("UIStroke")
-frameStroke.Color, frameStroke.Thickness, frameStroke.Parent = Color3.fromRGB(70,70,88), 1, frame
-local toggleIcon = make("TextButton", "ToggleIcon", UDim2.fromOffset(42,42), UDim2.new(0,18,.42,0), gui, {
-    BackgroundColor3 = Color3.fromRGB(45,55,82), BorderSizePixel = 0, Text = "A", TextColor3 = Color3.new(1,1,1),
-    TextSize = 21, Font = Enum.Font.GothamBold, Active = true, Draggable = true, ZIndex = 20,
-})
+frameStroke.Color = Color3.fromRGB(70, 70, 88)
+frameStroke.Thickness = 1
+frameStroke.Parent = frame
+
+local toggleIcon = make(
+    "TextButton",
+    "ToggleIcon",
+    UDim2.fromOffset(42, 42),
+    UDim2.new(0, 18, 0.42, 0),
+    gui,
+    {
+        BackgroundColor3 = Color3.fromRGB(45, 55, 82),
+        BorderSizePixel = 0,
+        Text = "A",
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 21,
+        Font = Enum.Font.GothamBold,
+        Active = true,
+        Draggable = true,
+        ZIndex = 20,
+    }
+)
+
 round(toggleIcon, 13)
+
 local iconStroke = Instance.new("UIStroke")
-iconStroke.Color, iconStroke.Thickness, iconStroke.Parent = Color3.fromRGB(110,140,220), 1.5, toggleIcon
-make("TextLabel", "IconHint", UDim2.new(1,0,0,12), UDim2.new(0,0,1,-2), toggleIcon, {
-    BackgroundTransparency = 1, Text = "R15", TextColor3 = Color3.fromRGB(220,225,245), TextSize = 8,
-    Font = Enum.Font.GothamBold, ZIndex = 21,
-})
-make("TextLabel", "Title", UDim2.new(1,-45,0,32), UDim2.fromOffset(10,5), frame, {
-    BackgroundTransparency = 1, Text = "R15 Avatar Changer", TextColor3 = Color3.new(1,1,1), TextSize = 18,
-    Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 11,
-})
-local close = make("TextButton", "HideWindow", UDim2.fromOffset(28,28), UDim2.new(1,-33,0,5), frame, {
-    BackgroundColor3 = Color3.fromRGB(170,55,65), BorderSizePixel = 0, Text = "X", TextColor3 = Color3.new(1,1,1),
-    Font = Enum.Font.GothamBold, TextSize = 14, ZIndex = 12,
-})
+iconStroke.Color = Color3.fromRGB(110, 140, 220)
+iconStroke.Thickness = 1.5
+iconStroke.Parent = toggleIcon
+
+make(
+    "TextLabel",
+    "IconHint",
+    UDim2.new(1, 0, 0, 12),
+    UDim2.new(0, 0, 1, -2),
+    toggleIcon,
+    {
+        BackgroundTransparency = 1,
+        Text = "R15",
+        TextColor3 = Color3.fromRGB(220, 225, 245),
+        TextSize = 8,
+        Font = Enum.Font.GothamBold,
+        ZIndex = 21,
+    }
+)
+
+make(
+    "TextLabel",
+    "Title",
+    UDim2.new(1, -45, 0, 32),
+    UDim2.fromOffset(10, 5),
+    frame,
+    {
+        BackgroundTransparency = 1,
+        Text = "R15 Avatar Changer",
+        TextColor3 = Color3.new(1, 1, 1),
+        TextSize = 18,
+        Font = Enum.Font.GothamBold,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 11,
+    }
+)
+
+local close = make(
+    "TextButton",
+    "HideWindow",
+    UDim2.fromOffset(28, 28),
+    UDim2.new(1, -33, 0, 5),
+    frame,
+    {
+        BackgroundColor3 = Color3.fromRGB(170, 55, 65),
+        BorderSizePixel = 0,
+        Text = "X",
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        ZIndex = 12,
+    }
+)
+
 round(close, 7)
-local input = make("TextBox", "UsernameInput", UDim2.new(1,-20,0,34), UDim2.fromOffset(10,43), frame, {
-    BackgroundColor3 = Color3.fromRGB(45,45,56), BorderSizePixel = 0, TextColor3 = Color3.new(1,1,1),
-    PlaceholderText = "Roblox username...", PlaceholderColor3 = Color3.fromRGB(155,155,170), Text = "",
-    ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = 14, ZIndex = 11,
-})
+
+local input = make(
+    "TextBox",
+    "UsernameInput",
+    UDim2.new(1, -20, 0, 34),
+    UDim2.fromOffset(10, 43),
+    frame,
+    {
+        BackgroundColor3 = Color3.fromRGB(45, 45, 56),
+        BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1),
+        PlaceholderText = "Roblox username...",
+        PlaceholderColor3 = Color3.fromRGB(155, 155, 170),
+        Text = "",
+        ClearTextOnFocus = false,
+        Font = Enum.Font.Gotham,
+        TextSize = 14,
+        ZIndex = 11,
+    }
+)
+
 round(input, 6)
-local applyButton = make("TextButton", "ApplyButton", UDim2.new(1,-20,0,34), UDim2.fromOffset(10,85), frame, {
-    BackgroundColor3 = Color3.fromRGB(70,105,190), BorderSizePixel = 0, Text = "Apply Avatar",
-    TextColor3 = Color3.new(1,1,1), Font = Enum.Font.GothamBold, TextSize = 14, ZIndex = 11,
-})
+
+local applyButton = make(
+    "TextButton",
+    "ApplyButton",
+    UDim2.new(1, -20, 0, 34),
+    UDim2.fromOffset(10, 85),
+    frame,
+    {
+        BackgroundColor3 = Color3.fromRGB(70, 105, 190),
+        BorderSizePixel = 0,
+        Text = "Apply Avatar",
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.GothamBold,
+        TextSize = 14,
+        ZIndex = 11,
+    }
+)
+
 round(applyButton, 6)
-local respawnButton = make("TextButton", "RespawnButton", UDim2.new(1,-20,0,28), UDim2.fromOffset(10,126), frame, {
-    BackgroundColor3 = Color3.fromRGB(65,65,78), BorderSizePixel = 0, TextColor3 = Color3.new(1,1,1),
-    Font = Enum.Font.Gotham, TextSize = 12, ZIndex = 11,
-})
+
+local respawnButton = make(
+    "TextButton",
+    "RespawnButton",
+    UDim2.new(1, -20, 0, 28),
+    UDim2.fromOffset(10, 126),
+    frame,
+    {
+        BackgroundColor3 = Color3.fromRGB(65, 65, 78),
+        BorderSizePixel = 0,
+        TextColor3 = Color3.new(1, 1, 1),
+        Font = Enum.Font.Gotham,
+        TextSize = 12,
+        ZIndex = 11,
+    }
+)
+
 round(respawnButton, 6)
-local status = make("TextLabel", "Status", UDim2.new(1,-20,0,23), UDim2.fromOffset(10,160), frame, {
-    BackgroundTransparency = 1, Text = "Ready", TextColor3 = Color3.fromRGB(190,190,200), Font = Enum.Font.Gotham,
-    TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 11,
-})
-local function setStatus(s) if status and status.Parent then status.Text = tostring(s) end end
-local function updateRespawnButton()
-    if applyOnRespawn then respawnButton.Text = "Apply When Respawn: ON"; respawnButton.BackgroundColor3 = Color3.fromRGB(50,135,90)
-    else respawnButton.Text = "Apply When Respawn: OFF"; respawnButton.BackgroundColor3 = Color3.fromRGB(65,65,78) end
+
+local status = make(
+    "TextLabel",
+    "Status",
+    UDim2.new(1, -20, 0, 23),
+    UDim2.fromOffset(10, 160),
+    frame,
+    {
+        BackgroundTransparency = 1,
+        Text = "Ready",
+        TextColor3 = Color3.fromRGB(190, 190, 200),
+        Font = Enum.Font.Gotham,
+        TextSize = 11,
+        TextWrapped = true,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        ZIndex = 11,
+    }
+)
+
+local function setStatus(message)
+    if status and status.Parent then
+        status.Text = tostring(message)
+    end
 end
-toggleIcon.MouseButton1Click:Connect(function() frame.Visible = not frame.Visible end)
-close.MouseButton1Click:Connect(function() frame.Visible = false end)
+
+local function updateRespawnButton()
+    if applyOnRespawn then
+        respawnButton.Text = "Apply When Respawn: ON"
+        respawnButton.BackgroundColor3 = Color3.fromRGB(50, 135, 90)
+    else
+        respawnButton.Text = "Apply When Respawn: OFF"
+        respawnButton.BackgroundColor3 = Color3.fromRGB(65, 65, 78)
+    end
+end
+
+toggleIcon.MouseButton1Click:Connect(function()
+    frame.Visible = not frame.Visible
+end)
+
+close.MouseButton1Click:Connect(function()
+    frame.Visible = false
+end)
+
 updateRespawnButton()
 
--- R15 character helpers
-local function inspectR15Model(model)
-    if not model or not model:IsA("Model") then return nil end
-    local hum = model:FindFirstChildOfClass("Humanoid")
-    local head, upper, lower, root = model:FindFirstChild("Head",true), model:FindFirstChild("UpperTorso",true),
-        model:FindFirstChild("LowerTorso",true), model:FindFirstChild("HumanoidRootPart",true)
-    if not hum or hum.RigType ~= Enum.HumanoidRigType.R15 then return nil end
-    if not (head and head:IsA("BasePart") and upper and upper:IsA("BasePart") and lower and lower:IsA("BasePart")
-        and root and root:IsA("BasePart")) then return nil end
-    return model, head, hum
-end
-local function getR15Character()
-    local root = LocalPlayer.Character
-    if not root then return nil end
-    local hum = root:FindFirstChildOfClass("Humanoid")
-    if hum and hum.RigType ~= Enum.HumanoidRigType.R15 then return nil end
-    local model, head, foundHum = inspectR15Model(root)
-    if model then return model, head, foundHum end
-    for _, item in ipairs(root:GetDescendants()) do
-        if item:IsA("Model") then
-            model, head, foundHum = inspectR15Model(item)
-            if model then return model, head, foundHum end
-        end
+--==================================================
+-- CHARACTER HELPERS
+--==================================================
+
+local function getPlayerCharacter()
+    local character = LocalPlayer.Character
+    if not character then
+        return nil
     end
-    return nil
+
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+    if not humanoid or humanoid.RigType ~= Enum.HumanoidRigType.R15 then
+        return nil
+    end
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    local head = character:FindFirstChild("Head")
+
+    if not (
+        root and root:IsA("BasePart")
+        and head and head:IsA("BasePart")
+    ) then
+        return nil
+    end
+
+    return character, humanoid
 end
+
 local function getBodyPart(model, name)
-    local part = model and model:FindFirstChild(name, true)
-    return part and part:IsA("BasePart") and part or nil
-end
-local function getHandle(accessory)
-    local h = accessory:FindFirstChild("Handle")
-    return h and h:IsA("BasePart") and h or nil
-end
-local function findBodyAttachment(character, attachmentName)
-    for _, name in ipairs(BODY_PART_NAMES) do
-        local part = getBodyPart(character, name)
-        if part then
-            for _, obj in ipairs(part:GetDescendants()) do
-                if obj:IsA("Attachment") and obj.Name == attachmentName then return obj, part end
-            end
-        end
+    if not model then
+        return nil
     end
-    return nil, nil
-end
 
--- Layered clothing isn't rigidly weldable like classic accessories.
-local layeredTypes = {}
-for _, name in ipairs({"TShirt","Shirt","Pants","Jacket","Sweater","Shorts","LeftShoe","RightShoe","DressSkirt"}) do
-    local ok, kind = pcall(function() return Enum.AccessoryType[name] end)
-    if ok and kind then layeredTypes[kind] = true end
-end
-local function isLayeredClothing(accessory)
-    local ok, kind = pcall(function() return accessory.AccessoryType end)
-    return ok and layeredTypes[kind] == true
-end
+    local part = model:FindFirstChild(name, true)
 
--- Capture an accessory's original source-rig binding before cloning it.
-local function getOriginalBinding(sourceModel, accessory)
-    local handle = getHandle(accessory)
-    if not handle then return nil end
-    for _, obj in ipairs(accessory:GetDescendants()) do
-        if obj:IsA("JointInstance") then
-            local p0, p1, other, handleWasPart0 = obj.Part0, obj.Part1, nil, false
-            if p0 == handle and p1 ~= handle then other, handleWasPart0 = p1, true
-            elseif p1 == handle and p0 ~= handle then other = p0 end
-            if other and other:IsA("BasePart") and other:IsDescendantOf(sourceModel) and not other:IsDescendantOf(accessory) then
-                return {kind="Joint", bodyName=other.Name, handleWasPart0=handleWasPart0, C0=obj.C0, C1=obj.C1,
-                    relativeCFrame=other.CFrame:ToObjectSpace(handle.CFrame)}
-            end
-        elseif obj:IsA("WeldConstraint") then
-            local p0, p1, other = obj.Part0, obj.Part1, nil
-            if p0 == handle and p1 ~= handle then other = p1 elseif p1 == handle and p0 ~= handle then other = p0 end
-            if other and other:IsA("BasePart") and other:IsDescendantOf(sourceModel) and not other:IsDescendantOf(accessory) then
-                return {kind="Relative", bodyName=other.Name, relativeCFrame=other.CFrame:ToObjectSpace(handle.CFrame)}
-            end
-        end
+    if part and part:IsA("BasePart") then
+        return part
     end
+
     return nil
 end
-local function findAttachmentBinding(accessory, character)
-    local handle = getHandle(accessory)
-    if not handle then return nil end
-    for _, obj in ipairs(handle:GetDescendants()) do
-        if obj:IsA("Attachment") then
-            local targetAttachment, targetPart = findBodyAttachment(character, obj.Name)
-            if targetAttachment and targetPart then
-                return {kind="Attachment", bodyName=targetPart.Name, sourceAttachmentCFrame=obj.CFrame,
-                    targetAttachmentCFrame=targetAttachment.CFrame}
-            end
-        end
-    end
-    return nil
-end
-local function findNearestBodyBinding(sourceModel, accessory)
-    local handle = getHandle(accessory)
-    if not handle then return nil end
-    local nearest, minDistance = nil, math.huge
-    for _, name in ipairs(BODY_PART_NAMES) do
-        local part = getBodyPart(sourceModel, name)
-        if part then
-            local d = (part.Position - handle.Position).Magnitude
-            if d < minDistance then nearest, minDistance = part, d end
-        end
-    end
-    if not nearest then return nil end
-    return {kind="Relative", bodyName=nearest.Name, relativeCFrame=nearest.CFrame:ToObjectSpace(handle.CFrame)}
-end
-local function prepareAccessoryClone(accessory)
-    for _, obj in ipairs(accessory:GetDescendants()) do
-        if obj:IsA("JointInstance") or obj:IsA("WeldConstraint") then obj:Destroy()
-        elseif obj:IsA("BasePart") then
-            obj.Anchored, obj.CanCollide, obj.CanTouch, obj.CanQuery, obj.Massless = false, false, false, false, true
-        end
-    end
-end
-local function weldAccessory(sourceModel, character, sourceAccessory)
-    if isLayeredClothing(sourceAccessory) then return false, "Layered clothing skipped" end
-    if not getHandle(sourceAccessory) then return false, "Accessory has no Handle" end
-    local binding = getOriginalBinding(sourceModel, sourceAccessory)
-    local targetPart = binding and getBodyPart(character, binding.bodyName)
-    if not targetPart then
-        binding = findAttachmentBinding(sourceAccessory, character)
-        targetPart = binding and getBodyPart(character, binding.bodyName)
-    end
-    if not targetPart then
-        binding = findNearestBodyBinding(sourceModel, sourceAccessory)
-        targetPart = binding and getBodyPart(character, binding.bodyName)
-    end
-    if not targetPart or not binding then return false, "No R15 attachment target" end
 
-    local ok, clone = pcall(function() return sourceAccessory:Clone() end)
-    if not ok or not clone then return false, "Accessory clone failed" end
-    local handle = getHandle(clone)
-    if not handle then clone:Destroy(); return false, "Cloned accessory has no Handle" end
-    prepareAccessoryClone(clone)
-    clone.Parent = character
-    local weld = Instance.new("Weld")
-    weld.Name, weld.Part0, weld.Part1 = "R15AccessoryWeld", targetPart, handle
-    if binding.kind == "Joint" then
-        if binding.handleWasPart0 then weld.C0, weld.C1 = binding.C1, binding.C0
-        else weld.C0, weld.C1 = binding.C0, binding.C1 end
-    elseif binding.kind == "Attachment" then
-        weld.C0, weld.C1 = binding.targetAttachmentCFrame, binding.sourceAttachmentCFrame
-    else
-        weld.C0, weld.C1 = binding.relativeCFrame, CFrame.new()
-    end
-    local positioned, err = pcall(function() handle.CFrame = targetPart.CFrame * weld.C0 * weld.C1:Inverse() end)
-    if not positioned then clone:Destroy(); weld:Destroy(); return false, "Handle position failed: " .. tostring(err) end
-    weld.Parent = handle
-    return true
-end
+--==================================================
+-- RESTORE / HIDE PLAYER VISUALS
+--==================================================
 
--- Copy source R15 mesh parts and attachments, then rewire the target rig's joints.
-local function copyR15BodyGeometry(source, character)
-    local partMap = {} -- old local body part -> cloned source body part
-    for _, name in ipairs(BODY_PART_NAMES) do
-        local sourcePart, oldPart = getBodyPart(source, name), getBodyPart(character, name)
-        if sourcePart and oldPart then
-            local ok, clone = pcall(function() return sourcePart:Clone() end)
-            if ok and clone and clone:IsA("BasePart") then
-                -- Cloned joints could still reference the temporary source model.
-                for _, child in ipairs(clone:GetDescendants()) do
-                    if child:IsA("JointInstance") or child:IsA("WeldConstraint") then child:Destroy() end
-                end
-                clone.Name, clone.CFrame = name, oldPart.CFrame
-                clone.Anchored, clone.CanCollide = oldPart.Anchored, oldPart.CanCollide
-                clone.CanTouch, clone.CanQuery, clone.Massless = oldPart.CanTouch, oldPart.CanQuery, oldPart.Massless
-                clone.Parent = oldPart.Parent
-                partMap[oldPart] = clone
-            elseif clone then
-                clone:Destroy()
-            end
-        end
-    end
-
-    local sourceMotors = {}
-    for _, obj in ipairs(source:GetDescendants()) do
-        if obj:IsA("Motor6D") then sourceMotors[obj.Name] = obj end
-    end
-
-    -- Repoint the existing joints before removing the original parts.
-    for _, joint in ipairs(character:GetDescendants()) do
-        if joint:IsA("JointInstance") then
-            local newParent = partMap[joint.Parent]
-            if newParent then joint.Parent = newParent end
-            if joint.Part0 and partMap[joint.Part0] then joint.Part0 = partMap[joint.Part0] end
-            if joint.Part1 and partMap[joint.Part1] then joint.Part1 = partMap[joint.Part1] end
-            if joint:IsA("Motor6D") then
-                local sourceMotor = sourceMotors[joint.Name]
-                if sourceMotor then
-                    pcall(function() joint.C0, joint.C1 = sourceMotor.C0, sourceMotor.C1 end)
-                end
-            end
-        elseif joint:IsA("WeldConstraint") then
-            if joint.Part0 and partMap[joint.Part0] then joint.Part0 = partMap[joint.Part0] end
-            if joint.Part1 and partMap[joint.Part1] then joint.Part1 = partMap[joint.Part1] end
-        end
-    end
-
-    for oldPart in pairs(partMap) do
-        if oldPart and oldPart.Parent then oldPart:Destroy() end
-    end
-
-    -- Mesh geometry comes from each cloned source part; match its visible surface settings too.
-    for _, name in ipairs(BODY_PART_NAMES) do
-        local src, target = getBodyPart(source, name), getBodyPart(character, name)
-        if src and target then
+local function restoreOriginalVisibility()
+    for object, oldTransparency in pairs(hiddenOriginals) do
+        if object and object.Parent then
             pcall(function()
-                target.Color, target.Transparency, target.Reflectance = src.Color, src.Transparency, src.Reflectance
+                object.Transparency = oldTransparency
             end)
         end
     end
-    return #BODY_PART_NAMES
+
+    table.clear(hiddenOriginals)
 end
 
-local function copyR15Appearance(source, character)
-    local copied, skipped = 0, 0
-    for _, obj in ipairs(character:GetChildren()) do
-        if obj:IsA("Accessory") then obj:Destroy()
-        elseif obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") or obj:IsA("BodyColors") then obj:Destroy() end
+local function removePreviousOverlay()
+    if activeOverlay then
+        pcall(function()
+            activeOverlay:Destroy()
+        end)
+
+        activeOverlay = nil
     end
 
-    local partCount = copyR15BodyGeometry(source, character)
+    restoreOriginalVisibility()
+end
 
-    -- Classic clothing and BodyColors. Layered clothing is handled separately and skipped.
-    for _, obj in ipairs(source:GetDescendants()) do
-        if obj:IsA("Shirt") or obj:IsA("Pants") or obj:IsA("ShirtGraphic") or obj:IsA("BodyColors") then
-            local ok, clone = pcall(function() return obj:Clone() end)
-            if ok and clone then clone.Parent = character; copied += 1 else skipped += 1 end
-        end
-    end
+local function hideOriginalCharacter(character, overlay)
+    for _, object in ipairs(character:GetDescendants()) do
+        -- Never hide anything belonging to the newly-added avatar.
+        if not object:IsDescendantOf(overlay) then
+            if object:IsA("BasePart")
+                or object:IsA("Decal")
+                or object:IsA("Texture") then
 
-    for _, obj in ipairs(source:GetDescendants()) do
-        if obj:IsA("Accessory") then
-            local parent, nested = obj.Parent, false
-            while parent and parent ~= source do
-                if parent:IsA("Accessory") then nested = true; break end
-                parent = parent.Parent
-            end
-            if not nested then
-                if isLayeredClothing(obj) then
-                    skipped += 1
-                else
-                    local ok, result = pcall(function() return weldAccessory(source, character, obj) end)
-                    if ok and result == true then copied += 1 else skipped += 1 end
+                if hiddenOriginals[object] == nil then
+                    hiddenOriginals[object] = object.Transparency
                 end
+
+                -- Global transparency change, as requested.
+                object.Transparency = 1
             end
         end
     end
-    return copied, skipped, partCount
 end
 
--- Apply avatar appearance locally.
+--==================================================
+-- ALIGN THE OVERLAY MODEL
+--==================================================
+
+local function alignOverlayRoot(overlay, playerRoot)
+    local overlayRoot = getBodyPart(overlay, "HumanoidRootPart")
+
+    if not overlayRoot then
+        error("Target avatar is missing HumanoidRootPart.")
+    end
+
+    -- Move the complete overlay model so the two root parts start aligned.
+    -- No parts are transferred into or substituted for the player's rig.
+    local offset = playerRoot.CFrame * overlayRoot.CFrame:Inverse()
+    overlay:PivotTo(offset * overlay:GetPivot())
+end
+
+--==================================================
+-- WELD OVERLAY -> PLAYER
+--==================================================
+
+local function weldOverlayToPlayer(overlay, playerCharacter)
+    local partsToWeld = {}
+
+    -- Gather all matching parts before creating any weld.
+    for _, partName in ipairs(BODY_PART_NAMES) do
+        local playerPart = getBodyPart(playerCharacter, partName)
+        local overlayPart = getBodyPart(overlay, partName)
+
+        if playerPart and overlayPart then
+            table.insert(partsToWeld, {
+                Name = partName,
+                PlayerPart = playerPart,
+                OverlayPart = overlayPart,
+            })
+        end
+    end
+
+    if #partsToWeld == 0 then
+        error("No matching R15 parts found to weld.")
+    end
+
+    -- STEP 1: CREATE ALL BODY WELDS FIRST.
+    -- Part0 = player's original part.
+    -- Part1 = matching part on the added avatar.
+    -- Motor6Ds in BOTH rigs are left untouched and enabled.
+    local weldCount = 0
+
+    for _, pair in ipairs(partsToWeld) do
+        local playerPart = pair.PlayerPart
+        local overlayPart = pair.OverlayPart
+
+        local weld = Instance.new("Weld")
+        weld.Name = "LocalAvatarWeld_" .. pair.Name
+
+        weld.Part0 = playerPart
+        weld.Part1 = overlayPart
+
+        -- Keep the overlay part's current relative offset.
+        weld.C0 = playerPart.CFrame:ToObjectSpace(overlayPart.CFrame)
+        weld.C1 = CFrame.new()
+
+        weld.Parent = overlayPart
+
+        weldCount += 1
+    end
+
+    -- STEP 2: ONLY AFTER ALL WELDS EXIST, DISABLE COLLISION.
+    for _, object in ipairs(overlay:GetDescendants()) do
+        if object:IsA("BasePart") then
+            object.Anchored = false
+            object.CanCollide = false
+            object.CanTouch = false
+            object.CanQuery = false
+            object.Massless = true
+        end
+    end
+
+    return weldCount, #partsToWeld
+end
+
+--==================================================
+-- APPLY AVATAR
+--==================================================
+
 local function applyAvatar(username)
-    if applying then return end
-    username = tostring(username or ""):gsub("^%s+", ""):gsub("%s+$", "")
-    if username == "" then setStatus("Enter a username first."); return end
+    if applying then
+        return
+    end
+
+    username = tostring(username or "")
+        :gsub("^%s+", "")
+        :gsub("%s+$", "")
+
+    if username == "" then
+        setStatus("Enter a username first.")
+        return
+    end
+
     applying = true
     applyButton.Text = "Loading..."
     setStatus("Loading R15 avatar...")
-    local sourceModel, sourceDescription
+
+    local sourceModel
+    local sourceDescription
 
     local ok, err = pcall(function()
-        if not getR15Character() then error("Your character must be R15 and fully loaded.") end
+        local currentCharacter = getPlayerCharacter()
+
+        if not currentCharacter then
+            error("Your character must be R15 and fully loaded.")
+        end
+
+        -- Resolve username and obtain the avatar description.
         local userId = Players:GetUserIdFromNameAsync(username)
-        sourceDescription = Players:GetHumanoidDescriptionFromUserIdAsync(userId)
-        if not sourceDescription then error("Could not load target avatar description.") end
-        sourceModel = Players:CreateHumanoidModelFromDescriptionAsync(sourceDescription, Enum.HumanoidRigType.R15)
-        if not sourceModel then error("Could not create source R15 model.") end
-        local sourceHumanoid = sourceModel:FindFirstChildOfClass("Humanoid")
-        if not sourceHumanoid or sourceHumanoid.RigType ~= Enum.HumanoidRigType.R15 then
-            error("Source model is not R15; current appearance was not changed.")
+
+        sourceDescription =
+            Players:GetHumanoidDescriptionFromUserIdAsync(userId)
+
+        if not sourceDescription then
+            error("Could not load the target avatar description.")
         end
-        for _, name in ipairs(BODY_PART_NAMES) do
-            if not getBodyPart(sourceModel, name) then error("Source R15 model is missing body part: " .. name) end
+
+        -- Create a complete separate R15 rig with its avatar appearance.
+        sourceModel =
+            Players:CreateHumanoidModelFromDescriptionAsync(
+                sourceDescription,
+                Enum.HumanoidRigType.R15
+            )
+
+        if not sourceModel then
+            error("Could not create the target R15 model.")
         end
-        -- Re-resolve after the avatar API calls in case the player respawned.
-        local character = getR15Character()
-        if not character then error("Your R15 character is no longer available.") end
-        local copied, skipped, partCount = copyR15Appearance(sourceModel, character)
-        setStatus("Copied " .. copied .. " | Skipped " .. skipped .. " | R15 parts: " .. partCount)
+
+        local sourceHumanoid =
+            sourceModel:FindFirstChildOfClass("Humanoid")
+
+        if not sourceHumanoid
+            or sourceHumanoid.RigType ~= Enum.HumanoidRigType.R15 then
+            error("The target model is not an R15 rig.")
+        end
+
+        for _, partName in ipairs(BODY_PART_NAMES) do
+            if not getBodyPart(sourceModel, partName) then
+                error("Missing target body part: " .. partName)
+            end
+        end
+
+        -- Resolve the character again after avatar API calls.
+        local character = getPlayerCharacter()
+
+        if not character then
+            error("Your R15 character is no longer available.")
+        end
+
+        local playerRoot = getBodyPart(character, "HumanoidRootPart")
+
+        if not playerRoot then
+            error("Your character is missing HumanoidRootPart.")
+        end
+
+        -- Remove the previous overlay and restore the original visibility.
+        removePreviousOverlay()
+
+        -- Parent the independent rig under the player's character.
+        sourceModel.Name = OVERLAY_NAME
+
+        -- Align the complete model by its root; don't replace any player parts.
+        alignOverlayRoot(sourceModel, playerRoot)
+        sourceModel.Parent = character
+
+        -- Weld first, then switch off collisions.
+        local welded, available =
+            weldOverlayToPlayer(sourceModel, character)
+
+        activeOverlay = sourceModel
+
+        -- Finally, hide the player's original parts and old accessories.
+        hideOriginalCharacter(character, sourceModel)
+
+        setStatus(
+            "Welded " .. welded .. "/" .. available
+            .. " R15 parts. Original player rig kept."
+        )
     end)
 
-    if sourceModel then pcall(function() sourceModel:Destroy() end) end
-    if sourceDescription then pcall(function() sourceDescription:Destroy() end) end
-    if not ok then setStatus("Error: " .. tostring(err)) end
+    if sourceDescription then
+        pcall(function()
+            sourceDescription:Destroy()
+        end)
+    end
+
+    if not ok then
+        if sourceModel and sourceModel ~= activeOverlay then
+            pcall(function()
+                sourceModel:Destroy()
+            end)
+        end
+
+        setStatus("Error: " .. tostring(err))
+    end
+
     applying = false
-    if applyButton and applyButton.Parent then applyButton.Text = "Apply Avatar" end
+
+    if applyButton and applyButton.Parent then
+        applyButton.Text = "Apply Avatar"
+    end
 end
+
+--==================================================
+-- BUTTONS / RESPAWN
+--==================================================
 
 applyButton.MouseButton1Click:Connect(function()
     lastUsername = input.Text
     applyAvatar(lastUsername)
 end)
+
 respawnButton.MouseButton1Click:Connect(function()
     applyOnRespawn = not applyOnRespawn
     lastUsername = input.Text
+
     updateRespawnButton()
-    setStatus(applyOnRespawn and "Respawn apply enabled." or "Respawn apply disabled.")
+
+    setStatus(
+        applyOnRespawn
+        and "Respawn apply enabled."
+        or "Respawn apply disabled."
+    )
 end)
-if respawnConnection then respawnConnection:Disconnect() end
+
+if respawnConnection then
+    respawnConnection:Disconnect()
+end
+
 respawnConnection = LocalPlayer.CharacterAdded:Connect(function()
-    if applyOnRespawn and lastUsername ~= "" then task.wait(2); applyAvatar(lastUsername) end
+    -- The previous character and its overlay disappear on respawn.
+    activeOverlay = nil
+    table.clear(hiddenOriginals)
+
+    if applyOnRespawn and lastUsername ~= "" then
+        task.wait(2)
+        applyAvatar(lastUsername)
+    end
 end)
+
 setStatus("Ready. Tap A to hide/show this window.")
