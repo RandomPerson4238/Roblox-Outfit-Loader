@@ -1,3 +1,4 @@
+-- R15 AVATAR CHANGER (V3 - PERFECT LAYERED CLOTHES & ANIMATION FIX)
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -12,7 +13,9 @@ local lastUsername = ""
 
 local activeOverlay
 local activeAnimationController
+local activeMotorSync
 local hiddenOriginals = {}
+local ResolvedAnimationCache = {} -- Cache an toàn tránh lỗi Executor
 
 local BODY_PART_NAMES = {
     "HumanoidRootPart", "Head", "UpperTorso", "LowerTorso",
@@ -41,6 +44,9 @@ local ANIMATION_PROPERTIES = {
     swim = "SwimAnimation",
 }
 
+--==================================================
+-- GUI SETUP
+--==================================================
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
 if oldGui then oldGui:Destroy() end
@@ -57,9 +63,7 @@ local function make(className, name, size, position, parent, props)
     obj.Size = size
     obj.Position = position
     obj.Parent = parent
-    for key, value in pairs(props or {}) do
-        obj[key] = value
-    end
+    for key, value in pairs(props or {}) do obj[key] = value end
     return obj
 end
 
@@ -71,10 +75,7 @@ end
 
 local frame = make("Frame", "MainWindow", UDim2.fromOffset(300, 190), UDim2.new(0.5, -150, 0.5, -95), gui, {
     BackgroundColor3 = Color3.fromRGB(28, 28, 36),
-    BorderSizePixel = 0,
-    Active = true,
-    Draggable = true,
-    ZIndex = 10,
+    BorderSizePixel = 0, Active = true, Draggable = true, ZIndex = 10,
 })
 round(frame, 10)
 
@@ -85,14 +86,8 @@ frameStroke.Parent = frame
 
 local toggleIcon = make("TextButton", "ToggleIcon", UDim2.fromOffset(42, 42), UDim2.new(0, 18, 0.42, 0), gui, {
     BackgroundColor3 = Color3.fromRGB(45, 55, 82),
-    BorderSizePixel = 0,
-    Text = "A",
-    TextColor3 = Color3.new(1, 1, 1),
-    TextSize = 21,
-    Font = Enum.Font.GothamBold,
-    Active = true,
-    Draggable = true,
-    ZIndex = 20,
+    BorderSizePixel = 0, Text = "A", TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 21, Font = Enum.Font.GothamBold, Active = true, Draggable = true, ZIndex = 20,
 })
 round(toggleIcon, 13)
 
@@ -102,85 +97,47 @@ iconStroke.Thickness = 1.5
 iconStroke.Parent = toggleIcon
 
 make("TextLabel", "IconHint", UDim2.new(1, 0, 0, 12), UDim2.new(0, 0, 1, -2), toggleIcon, {
-    BackgroundTransparency = 1,
-    Text = "R15",
-    TextColor3 = Color3.fromRGB(220, 225, 245),
-    TextSize = 8,
-    Font = Enum.Font.GothamBold,
-    ZIndex = 21,
+    BackgroundTransparency = 1, Text = "R15", TextColor3 = Color3.fromRGB(220, 225, 245),
+    TextSize = 8, Font = Enum.Font.GothamBold, ZIndex = 21,
 })
 
 make("TextLabel", "Title", UDim2.new(1, -45, 0, 32), UDim2.fromOffset(10, 5), frame, {
-    BackgroundTransparency = 1,
-    Text = "R15 Avatar Changer",
-    TextColor3 = Color3.new(1, 1, 1),
-    TextSize = 18,
-    Font = Enum.Font.GothamBold,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex = 11,
+    BackgroundTransparency = 1, Text = "R15 Avatar Changer", TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 18, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 11,
 })
 
 local close = make("TextButton", "HideWindow", UDim2.fromOffset(28, 28), UDim2.new(1, -33, 0, 5), frame, {
-    BackgroundColor3 = Color3.fromRGB(170, 55, 65),
-    BorderSizePixel = 0,
-    Text = "X",
-    TextColor3 = Color3.new(1, 1, 1),
-    Font = Enum.Font.GothamBold,
-    TextSize = 14,
-    ZIndex = 12,
+    BackgroundColor3 = Color3.fromRGB(170, 55, 65), BorderSizePixel = 0, Text = "X",
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 14, ZIndex = 12,
 })
 round(close, 7)
 
 local input = make("TextBox", "UsernameInput", UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 43), frame, {
-    BackgroundColor3 = Color3.fromRGB(45, 45, 56),
-    BorderSizePixel = 0,
-    TextColor3 = Color3.new(1, 1, 1),
-    PlaceholderText = "Roblox username...",
-    PlaceholderColor3 = Color3.fromRGB(155, 155, 170),
-    Text = "",
-    ClearTextOnFocus = false,
-    Font = Enum.Font.Gotham,
-    TextSize = 14,
-    ZIndex = 11,
+    BackgroundColor3 = Color3.fromRGB(45, 45, 56), BorderSizePixel = 0, TextColor3 = Color3.new(1, 1, 1),
+    PlaceholderText = "Roblox username...", PlaceholderColor3 = Color3.fromRGB(155, 155, 170),
+    Text = "", ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = 14, ZIndex = 11,
 })
 round(input, 6)
 
 local applyButton = make("TextButton", "ApplyButton", UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 85), frame, {
-    BackgroundColor3 = Color3.fromRGB(70, 105, 190),
-    BorderSizePixel = 0,
-    Text = "Apply Avatar",
-    TextColor3 = Color3.new(1, 1, 1),
-    Font = Enum.Font.GothamBold,
-    TextSize = 14,
-    ZIndex = 11,
+    BackgroundColor3 = Color3.fromRGB(70, 105, 190), BorderSizePixel = 0, Text = "Apply Avatar",
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 14, ZIndex = 11,
 })
 round(applyButton, 6)
 
 local respawnButton = make("TextButton", "RespawnButton", UDim2.new(1, -20, 0, 28), UDim2.fromOffset(10, 126), frame, {
-    BackgroundColor3 = Color3.fromRGB(65, 65, 78),
-    BorderSizePixel = 0,
-    TextColor3 = Color3.new(1, 1, 1),
-    Font = Enum.Font.Gotham,
-    TextSize = 12,
-    ZIndex = 11,
+    BackgroundColor3 = Color3.fromRGB(65, 65, 78), BorderSizePixel = 0, TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 12, ZIndex = 11,
 })
 round(respawnButton, 6)
 
 local status = make("TextLabel", "Status", UDim2.new(1, -20, 0, 23), UDim2.fromOffset(10, 160), frame, {
-    BackgroundTransparency = 1,
-    Text = "Ready",
-    TextColor3 = Color3.fromRGB(190, 190, 200),
-    Font = Enum.Font.Gotham,
-    TextSize = 11,
-    TextWrapped = true,
-    TextXAlignment = Enum.TextXAlignment.Left,
-    ZIndex = 11,
+    BackgroundTransparency = 1, Text = "Ready", TextColor3 = Color3.fromRGB(190, 190, 200),
+    Font = Enum.Font.Gotham, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 11,
 })
 
 local function setStatus(message)
-    if status and status.Parent then
-        status.Text = tostring(message)
-    end
+    if status and status.Parent then status.Text = tostring(message) end
 end
 
 local function updateRespawnButton()
@@ -193,16 +150,13 @@ local function updateRespawnButton()
     end
 end
 
-toggleIcon.MouseButton1Click:Connect(function()
-    frame.Visible = not frame.Visible
-end)
-
-close.MouseButton1Click:Connect(function()
-    frame.Visible = false
-end)
-
+toggleIcon.MouseButton1Click:Connect(function() frame.Visible = not frame.Visible end)
+close.MouseButton1Click:Connect(function() frame.Visible = false end)
 updateRespawnButton()
 
+--==================================================
+-- HELPERS
+--==================================================
 local function getBodyPart(model, name)
     if not model then return nil end
     local part = model:FindFirstChild(name, true)
@@ -219,38 +173,6 @@ local function getPlayerCharacter()
     local head = getBodyPart(character, "Head")
     if not root or not head then return nil end
     return character, humanoid
-end
-
-local function captureScaleState(humanoid)
-    local result = { AutomaticScalingEnabled = humanoid.AutomaticScalingEnabled, Values = {} }
-    for scaleName in pairs(SCALE_MAP) do
-        local value = humanoid:FindFirstChild(scaleName)
-        if value and value:IsA("NumberValue") then
-            result.Values[scaleName] = { Exists = true, Value = value.Value }
-        else
-            result.Values[scaleName] = { Exists = false }
-        end
-    end
-    return result
-end
-
-local function restoreScaleState(humanoid, state)
-    if not humanoid or not humanoid.Parent or not state then return end
-    for scaleName, saved in pairs(state.Values) do
-        local value = humanoid:FindFirstChild(scaleName)
-        if saved.Exists then
-            if not value or not value:IsA("NumberValue") then
-                if value then value:Destroy() end
-                value = Instance.new("NumberValue")
-                value.Name = scaleName
-                value.Parent = humanoid
-            end
-            value.Value = saved.Value
-        elseif value and value:IsA("NumberValue") then
-            value:Destroy()
-        end
-    end
-    pcall(function() humanoid.AutomaticScalingEnabled = state.AutomaticScalingEnabled end)
 end
 
 local function applyScaleFromDescription(humanoid, description)
@@ -282,15 +204,9 @@ end
 local function cleanupAnimationController(restoreAnimate)
     local controller = activeAnimationController
     if not controller then return end
-    for _, connection in ipairs(controller.Connections) do
-        pcall(function() connection:Disconnect() end)
-    end
-    for _, track in pairs(controller.Tracks) do
-        pcall(function() track:Stop(0.1) track:Destroy() end)
-    end
-    for _, animation in ipairs(controller.Animations) do
-        pcall(function() animation:Destroy() end)
-    end
+    for _, connection in ipairs(controller.Connections) do pcall(function() connection:Disconnect() end) end
+    for _, track in pairs(controller.Tracks) do pcall(function() track:Stop(0.1) track:Destroy() end) end
+    for _, animation in ipairs(controller.Animations) do pcall(function() animation:Destroy() end) end
     if restoreAnimate and controller.AnimateScript and controller.AnimateScript.Parent then
         pcall(function() controller.AnimateScript.Enabled = controller.AnimateWasEnabled end)
     end
@@ -303,10 +219,9 @@ local function removePreviousOverlay()
         pcall(function() activeOverlay:Destroy() end)
         activeOverlay = nil
     end
-    local character = LocalPlayer.Character
-    if character then
-        local old = character:FindFirstChild(OVERLAY_NAME)
-        if old then old:Destroy() end
+    if activeMotorSync then
+        activeMotorSync:Disconnect()
+        activeMotorSync = nil
     end
     restoreOriginalVisibility()
 end
@@ -315,116 +230,19 @@ local function hideOriginalCharacter(character, overlay)
     for _, object in ipairs(character:GetDescendants()) do
         if not object:IsDescendantOf(overlay) then
             if object:IsA("BasePart") or object:IsA("Decal") or object:IsA("Texture") then
-                if hiddenOriginals[object] == nil then
-                    hiddenOriginals[object] = object.Transparency
+                if object.Name ~= "HumanoidRootPart" then
+                    if hiddenOriginals[object] == nil then hiddenOriginals[object] = object.Transparency end
+                    object.Transparency = 1
                 end
-                object.Transparency = 1
             end
         end
     end
 end
 
-local function neutralizePlayer(character, humanoid)
-    local root = getBodyPart(character, "HumanoidRootPart")
-    if not root then error("HumanoidRootPart is missing.") end
-
-    local animateScript = character:FindFirstChild("Animate")
-    local animateWasEnabled = nil
-    if animateScript and (animateScript:IsA("LocalScript") or animateScript:IsA("Script")) then
-        animateWasEnabled = animateScript.Enabled
-        animateScript.Enabled = false
-    end
-
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-    if animator then
-        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-            pcall(function() track:Stop(0) end)
-        end
-    end
-
-    local freezeState = {
-        Root = root,
-        WasAnchored = root.Anchored,
-        LinearVelocity = root.AssemblyLinearVelocity,
-        AngularVelocity = root.AssemblyAngularVelocity,
-        AnimateScript = animateScript,
-        AnimateWasEnabled = animateWasEnabled,
-    }
-
-    root.Anchored = true
-    for _, object in ipairs(character:GetDescendants()) do
-        if object:IsA("Motor6D") then
-            pcall(function() object.Transform = CFrame.identity end)
-        end
-    end
-    RunService.Heartbeat:Wait()
-    RunService.Heartbeat:Wait()
-    return freezeState
-end
-
-local function restorePlayerAfterWeld(freezeState)
-    if not freezeState then return end
-    local root = freezeState.Root
-    if root and root.Parent then
-        root.Anchored = freezeState.WasAnchored
-        if not root.Anchored then
-            pcall(function()
-                root.AssemblyLinearVelocity = freezeState.LinearVelocity
-                root.AssemblyAngularVelocity = freezeState.AngularVelocity
-            end)
-        end
-    end
-end
-
-local function alignOverlayParts(overlay, character)
-    local matched = {}
-    for _, partName in ipairs(BODY_PART_NAMES) do
-        local playerPart = getBodyPart(character, partName)
-        local overlayPart = getBodyPart(overlay, partName)
-        if playerPart and overlayPart then
-            overlayPart.CFrame = playerPart.CFrame
-            table.insert(matched, { Name = partName, PlayerPart = playerPart, OverlayPart = overlayPart })
-        end
-    end
-    if #matched == 0 then error("No matching R15 body parts were found.") end
-    return matched
-end
-
-local function weldOverlay(matchedParts, overlay)
-    local weldCount = 0
-    for _, pair in ipairs(matchedParts) do
-        local weld = Instance.new("Weld")
-        weld.Name = "LocalAvatarWeld_" .. pair.Name
-        weld.Part0 = pair.PlayerPart
-        weld.Part1 = pair.OverlayPart
-        weld.C0 = pair.PlayerPart.CFrame:ToObjectSpace(pair.OverlayPart.CFrame)
-        weld.C1 = CFrame.identity
-        weld.Parent = pair.OverlayPart
-        weldCount += 1
-    end
-    for _, object in ipairs(overlay:GetDescendants()) do
-        if object:IsA("Motor6D") then object.Enabled = false end
-    end
-    for _, object in ipairs(overlay:GetDescendants()) do
-        if object:IsA("BasePart") then
-            object.CanCollide = false
-            object.CanTouch = false
-            object.CanQuery = false
-            object.Massless = true
-            object.Anchored = false
-        end
-    end
-    local overlayHumanoid = overlay:FindFirstChildOfClass("Humanoid")
-    if overlayHumanoid then
-        pcall(function() overlayHumanoid.EvaluateStateMachine = false end)
-        pcall(function() overlayHumanoid.AutoRotate = false; overlayHumanoid.WalkSpeed = 0; overlayHumanoid.JumpPower = 0; overlayHumanoid.JumpHeight = 0 end)
-    end
-    return weldCount
-end
-
 local function resolveRealAnimationId(catalogId)
     local numId = tonumber(tostring(catalogId):match("%d+"))
     if not numId or numId <= 0 then return nil end
+    if ResolvedAnimationCache[numId] then return ResolvedAnimationCache[numId] end
 
     local realId = nil
     pcall(function()
@@ -434,13 +252,18 @@ local function resolveRealAnimationId(catalogId)
             if animObj and animObj.AnimationId then
                 realId = animObj.AnimationId:match("%d+")
             end
-            objects[1]:Destroy()
+            -- ĐỂ NGUYÊN không gọi Destroy() để Executor không bị hỏng bộ nhớ đệm
         end
     end)
 
-    return realId or tostring(numId)
+    realId = realId or tostring(numId)
+    ResolvedAnimationCache[numId] = realId
+    return realId
 end
 
+--==================================================
+-- ANIMATION CONTROLLER
+--==================================================
 local function createAnimationController(character, humanoid, description, freezeState)
     local animator = humanoid:FindFirstChildOfClass("Animator")
     if not animator then
@@ -453,22 +276,14 @@ local function createAnimationController(character, humanoid, description, freez
     local connections = {}
 
     local controller = {
-        Tracks = tracks,
-        Animations = animationObjects,
-        Connections = connections,
-        AnimateScript = freezeState.AnimateScript,
-        AnimateWasEnabled = freezeState.AnimateWasEnabled,
-        Humanoid = humanoid,
+        Tracks = tracks, Animations = animationObjects, Connections = connections,
+        AnimateScript = freezeState.AnimateScript, AnimateWasEnabled = freezeState.AnimateWasEnabled, Humanoid = humanoid,
     }
 
     local priorities = {
-        idle = Enum.AnimationPriority.Idle,
-        walk = Enum.AnimationPriority.Movement,
-        run = Enum.AnimationPriority.Movement,
-        jump = Enum.AnimationPriority.Action,
-        fall = Enum.AnimationPriority.Action,
-        climb = Enum.AnimationPriority.Action,
-        swim = Enum.AnimationPriority.Action,
+        idle = Enum.AnimationPriority.Idle, walk = Enum.AnimationPriority.Movement,
+        run = Enum.AnimationPriority.Movement, jump = Enum.AnimationPriority.Action,
+        fall = Enum.AnimationPriority.Action, climb = Enum.AnimationPriority.Action, swim = Enum.AnimationPriority.Action,
     }
 
     local loadedCount = 0
@@ -484,21 +299,18 @@ local function createAnimationController(character, humanoid, description, freez
         animation.Parent = character
 
         table.insert(animationObjects, animation)
-
         local ok, track = pcall(function() return animator:LoadAnimation(animation) end)
         if not ok or not track then return end
 
         track.Priority = priorities[key] or Enum.AnimationPriority.Movement
         track.Looped = key ~= "jump"
-
         tracks[key] = track
         loadedCount += 1
     end
 
-    for key, propertyName in pairs(ANIMATION_PROPERTIES) do
-        loadTrack(key, propertyName)
-    end
+    for key, propertyName in pairs(ANIMATION_PROPERTIES) do loadTrack(key, propertyName) end
 
+    -- Nếu user không xài Animation Pack, trả về xài Animation mặc định
     if loadedCount == 0 then
         for _, animation in ipairs(animationObjects) do pcall(function() animation:Destroy() end) end
         if freezeState.AnimateScript and freezeState.AnimateScript.Parent and freezeState.AnimateWasEnabled ~= nil then
@@ -528,9 +340,7 @@ local function createAnimationController(character, humanoid, description, freez
         if not track then return end
 
         if currentKey == key and track.IsPlaying then
-            if (key == "walk" or key == "run") and speed then
-                pcall(function() track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6)) end)
-            end
+            if (key == "walk" or key == "run") and speed then pcall(function() track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6)) end) end
             return
         end
 
@@ -540,10 +350,7 @@ local function createAnimationController(character, humanoid, description, freez
             local ok = pcall(function() track:Play(0.12, 1, 1) end)
             if not ok then currentKey = nil; return end
         end
-
-        if (key == "walk" or key == "run") and speed then
-            pcall(function() track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6)) end)
-        end
+        if (key == "walk" or key == "run") and speed then pcall(function() track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6)) end) end
     end
 
     local function playLocomotion(speed)
@@ -580,6 +387,398 @@ local function createAnimationController(character, humanoid, description, freez
     return controller, loadedCount
 end
 
+--==================================================
+-- APPLY AVATAR CORE
+-- R15 AVATAR CHANGER (V3 - PERFECT LAYERED CLOTHES & ANIMATION FIX)
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local GUI_NAME = "AvatarChangerUI_R15"
+local OVERLAY_NAME = "LocalR15AvatarOverlay"
+
+local applying = false
+local applyOnRespawn = false
+local lastUsername = ""
+
+local activeOverlay
+local activeAnimationController
+local activeMotorSync
+local hiddenOriginals = {}
+local ResolvedAnimationCache = {} -- Cache an toàn tránh lỗi Executor
+
+local BODY_PART_NAMES = {
+    "HumanoidRootPart", "Head", "UpperTorso", "LowerTorso",
+    "LeftUpperArm", "LeftLowerArm", "LeftHand",
+    "RightUpperArm", "RightLowerArm", "RightHand",
+    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+    "RightUpperLeg", "RightLowerLeg", "RightFoot",
+}
+
+local SCALE_MAP = {
+    BodyHeightScale = "HeightScale",
+    BodyWidthScale = "WidthScale",
+    BodyDepthScale = "DepthScale",
+    HeadScale = "HeadScale",
+    BodyTypeScale = "BodyTypeScale",
+    BodyProportionScale = "ProportionScale",
+}
+
+local ANIMATION_PROPERTIES = {
+    idle = "IdleAnimation",
+    walk = "WalkAnimation",
+    run = "RunAnimation",
+    jump = "JumpAnimation",
+    fall = "FallAnimation",
+    climb = "ClimbAnimation",
+    swim = "SwimAnimation",
+}
+
+--==================================================
+-- GUI SETUP
+--==================================================
+local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local oldGui = playerGui:FindFirstChild(GUI_NAME)
+if oldGui then oldGui:Destroy() end
+
+local gui = Instance.new("ScreenGui")
+gui.Name = GUI_NAME
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+gui.Parent = playerGui
+
+local function make(className, name, size, position, parent, props)
+    local obj = Instance.new(className)
+    obj.Name = name
+    obj.Size = size
+    obj.Position = position
+    obj.Parent = parent
+    for key, value in pairs(props or {}) do obj[key] = value end
+    return obj
+end
+
+local function round(obj, radius)
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, radius)
+    corner.Parent = obj
+end
+
+local frame = make("Frame", "MainWindow", UDim2.fromOffset(300, 190), UDim2.new(0.5, -150, 0.5, -95), gui, {
+    BackgroundColor3 = Color3.fromRGB(28, 28, 36),
+    BorderSizePixel = 0, Active = true, Draggable = true, ZIndex = 10,
+})
+round(frame, 10)
+
+local frameStroke = Instance.new("UIStroke")
+frameStroke.Color = Color3.fromRGB(70, 70, 88)
+frameStroke.Thickness = 1
+frameStroke.Parent = frame
+
+local toggleIcon = make("TextButton", "ToggleIcon", UDim2.fromOffset(42, 42), UDim2.new(0, 18, 0.42, 0), gui, {
+    BackgroundColor3 = Color3.fromRGB(45, 55, 82),
+    BorderSizePixel = 0, Text = "A", TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 21, Font = Enum.Font.GothamBold, Active = true, Draggable = true, ZIndex = 20,
+})
+round(toggleIcon, 13)
+
+local iconStroke = Instance.new("UIStroke")
+iconStroke.Color = Color3.fromRGB(110, 140, 220)
+iconStroke.Thickness = 1.5
+iconStroke.Parent = toggleIcon
+
+make("TextLabel", "IconHint", UDim2.new(1, 0, 0, 12), UDim2.new(0, 0, 1, -2), toggleIcon, {
+    BackgroundTransparency = 1, Text = "R15", TextColor3 = Color3.fromRGB(220, 225, 245),
+    TextSize = 8, Font = Enum.Font.GothamBold, ZIndex = 21,
+})
+
+make("TextLabel", "Title", UDim2.new(1, -45, 0, 32), UDim2.fromOffset(10, 5), frame, {
+    BackgroundTransparency = 1, Text = "R15 Avatar Changer", TextColor3 = Color3.new(1, 1, 1),
+    TextSize = 18, Font = Enum.Font.GothamBold, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 11,
+})
+
+local close = make("TextButton", "HideWindow", UDim2.fromOffset(28, 28), UDim2.new(1, -33, 0, 5), frame, {
+    BackgroundColor3 = Color3.fromRGB(170, 55, 65), BorderSizePixel = 0, Text = "X",
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 14, ZIndex = 12,
+})
+round(close, 7)
+
+local input = make("TextBox", "UsernameInput", UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 43), frame, {
+    BackgroundColor3 = Color3.fromRGB(45, 45, 56), BorderSizePixel = 0, TextColor3 = Color3.new(1, 1, 1),
+    PlaceholderText = "Roblox username...", PlaceholderColor3 = Color3.fromRGB(155, 155, 170),
+    Text = "", ClearTextOnFocus = false, Font = Enum.Font.Gotham, TextSize = 14, ZIndex = 11,
+})
+round(input, 6)
+
+local applyButton = make("TextButton", "ApplyButton", UDim2.new(1, -20, 0, 34), UDim2.fromOffset(10, 85), frame, {
+    BackgroundColor3 = Color3.fromRGB(70, 105, 190), BorderSizePixel = 0, Text = "Apply Avatar",
+    TextColor3 = Color3.new(1, 1, 1), Font = Enum.Font.GothamBold, TextSize = 14, ZIndex = 11,
+})
+round(applyButton, 6)
+
+local respawnButton = make("TextButton", "RespawnButton", UDim2.new(1, -20, 0, 28), UDim2.fromOffset(10, 126), frame, {
+    BackgroundColor3 = Color3.fromRGB(65, 65, 78), BorderSizePixel = 0, TextColor3 = Color3.new(1, 1, 1),
+    Font = Enum.Font.Gotham, TextSize = 12, ZIndex = 11,
+})
+round(respawnButton, 6)
+
+local status = make("TextLabel", "Status", UDim2.new(1, -20, 0, 23), UDim2.fromOffset(10, 160), frame, {
+    BackgroundTransparency = 1, Text = "Ready", TextColor3 = Color3.fromRGB(190, 190, 200),
+    Font = Enum.Font.Gotham, TextSize = 11, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 11,
+})
+
+local function setStatus(message)
+    if status and status.Parent then status.Text = tostring(message) end
+end
+
+local function updateRespawnButton()
+    if applyOnRespawn then
+        respawnButton.Text = "Apply When Respawn: ON"
+        respawnButton.BackgroundColor3 = Color3.fromRGB(50, 135, 90)
+    else
+        respawnButton.Text = "Apply When Respawn: OFF"
+        respawnButton.BackgroundColor3 = Color3.fromRGB(65, 65, 78)
+    end
+end
+
+toggleIcon.MouseButton1Click:Connect(function() frame.Visible = not frame.Visible end)
+close.MouseButton1Click:Connect(function() frame.Visible = false end)
+updateRespawnButton()
+
+--==================================================
+-- HELPERS
+--==================================================
+local function getBodyPart(model, name)
+    if not model then return nil end
+    local part = model:FindFirstChild(name, true)
+    if part and part:IsA("BasePart") then return part end
+    return nil
+end
+
+local function getPlayerCharacter()
+    local character = LocalPlayer.Character
+    if not character then return nil end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.RigType ~= Enum.HumanoidRigType.R15 then return nil end
+    local root = getBodyPart(character, "HumanoidRootPart")
+    local head = getBodyPart(character, "Head")
+    if not root or not head then return nil end
+    return character, humanoid
+end
+
+local function applyScaleFromDescription(humanoid, description)
+    humanoid.AutomaticScalingEnabled = true
+    for scaleName, descriptionName in pairs(SCALE_MAP) do
+        local targetValue = tonumber(description[descriptionName])
+        if targetValue then
+            local value = humanoid:FindFirstChild(scaleName)
+            if not value or not value:IsA("NumberValue") then
+                if value then value:Destroy() end
+                value = Instance.new("NumberValue")
+                value.Name = scaleName
+                value.Parent = humanoid
+            end
+            value.Value = targetValue
+        end
+    end
+end
+
+local function restoreOriginalVisibility()
+    for object, oldTransparency in pairs(hiddenOriginals) do
+        if object and object.Parent then
+            pcall(function() object.Transparency = oldTransparency end)
+        end
+    end
+    table.clear(hiddenOriginals)
+end
+
+local function cleanupAnimationController(restoreAnimate)
+    local controller = activeAnimationController
+    if not controller then return end
+    for _, connection in ipairs(controller.Connections) do pcall(function() connection:Disconnect() end) end
+    for _, track in pairs(controller.Tracks) do pcall(function() track:Stop(0.1) track:Destroy() end) end
+    for _, animation in ipairs(controller.Animations) do pcall(function() animation:Destroy() end) end
+    if restoreAnimate and controller.AnimateScript and controller.AnimateScript.Parent then
+        pcall(function() controller.AnimateScript.Enabled = controller.AnimateWasEnabled end)
+    end
+    activeAnimationController = nil
+end
+
+local function removePreviousOverlay()
+    cleanupAnimationController(true)
+    if activeOverlay then
+        pcall(function() activeOverlay:Destroy() end)
+        activeOverlay = nil
+    end
+    if activeMotorSync then
+        activeMotorSync:Disconnect()
+        activeMotorSync = nil
+    end
+    restoreOriginalVisibility()
+end
+
+local function hideOriginalCharacter(character, overlay)
+    for _, object in ipairs(character:GetDescendants()) do
+        if not object:IsDescendantOf(overlay) then
+            if object:IsA("BasePart") or object:IsA("Decal") or object:IsA("Texture") then
+                if object.Name ~= "HumanoidRootPart" then
+                    if hiddenOriginals[object] == nil then hiddenOriginals[object] = object.Transparency end
+                    object.Transparency = 1
+                end
+            end
+        end
+    end
+end
+
+local function resolveRealAnimationId(catalogId)
+    local numId = tonumber(tostring(catalogId):match("%d+"))
+    if not numId or numId <= 0 then return nil end
+    if ResolvedAnimationCache[numId] then return ResolvedAnimationCache[numId] end
+
+    local realId = nil
+    pcall(function()
+        local objects = game:GetObjects("rbxassetid://" .. tostring(numId))
+        if objects and objects[1] then
+            local animObj = objects[1]:FindFirstChildWhichIsA("Animation", true)
+            if animObj and animObj.AnimationId then
+                realId = animObj.AnimationId:match("%d+")
+            end
+        end
+    end)
+
+    realId = realId or tostring(numId)
+    ResolvedAnimationCache[numId] = realId
+    return realId
+end
+
+--==================================================
+-- ANIMATION CONTROLLER
+--==================================================
+local function createAnimationController(character, humanoid, description, freezeState)
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if not animator then
+        animator = Instance.new("Animator")
+        animator.Parent = humanoid
+    end
+
+    local tracks = {}
+    local animationObjects = {}
+    local connections = {}
+
+    local controller = {
+        Tracks = tracks, Animations = animationObjects, Connections = connections,
+        AnimateScript = freezeState.AnimateScript, AnimateWasEnabled = freezeState.AnimateWasEnabled, Humanoid = humanoid,
+    }
+
+    local priorities = {
+        idle = Enum.AnimationPriority.Idle, walk = Enum.AnimationPriority.Movement,
+        run = Enum.AnimationPriority.Movement, jump = Enum.AnimationPriority.Action,
+        fall = Enum.AnimationPriority.Action, climb = Enum.AnimationPriority.Action, swim = Enum.AnimationPriority.Action,
+    }
+
+    local loadedCount = 0
+
+    local function loadTrack(key, propertyName)
+        local rawProp = description[propertyName]
+        local realAnimId = resolveRealAnimationId(rawProp)
+        if not realAnimId then return end
+
+        local animation = Instance.new("Animation")
+        animation.Name = "LocalAvatar_" .. key
+        animation.AnimationId = "rbxassetid://" .. realAnimId
+        animation.Parent = character
+
+        table.insert(animationObjects, animation)
+        local ok, track = pcall(function() return animator:LoadAnimation(animation) end)
+        if not ok or not track then return end
+
+        track.Priority = priorities[key] or Enum.AnimationPriority.Movement
+        track.Looped = key ~= "jump"
+        tracks[key] = track
+        loadedCount += 1
+    end
+
+    for key, propertyName in pairs(ANIMATION_PROPERTIES) do loadTrack(key, propertyName) end
+
+    if loadedCount == 0 then
+        for _, animation in ipairs(animationObjects) do pcall(function() animation:Destroy() end) end
+        if freezeState.AnimateScript and freezeState.AnimateScript.Parent and freezeState.AnimateWasEnabled ~= nil then
+            freezeState.AnimateScript.Enabled = freezeState.AnimateWasEnabled
+        end
+        return nil, 0
+    end
+
+    activeAnimationController = controller
+    local currentKey = nil
+    local specialState = nil
+    local lastSpeed = 0
+
+    local function stopOtherTracks(exceptKey)
+        for key, track in pairs(tracks) do
+            if key ~= exceptKey and track.IsPlaying then pcall(function() track:Stop(0.12) end) end
+        end
+    end
+
+    local function play(key, speed)
+        local track = tracks[key]
+        if not track and key == "run" then track = tracks.walk; key = track and "walk" or key end
+        if not track and key == "walk" then track = tracks.run; key = track and "run" or key end
+        if not track and (key == "jump" or key == "fall") then track = tracks.idle or tracks.walk or tracks.run end
+        if not track and key == "swim" then track = tracks.walk or tracks.idle end
+        if not track and key == "climb" then track = tracks.walk or tracks.idle end
+        if not track then return end
+
+        if currentKey == key and track.IsPlaying then
+            if (key == "walk" or key == "run") and speed then pcall(function() track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6)) end) end
+            return
+        end
+
+        stopOtherTracks(key)
+        currentKey = key
+        if not track.IsPlaying then
+            local ok = pcall(function() track:Play(0.12, 1, 1) end)
+            if not ok then currentKey = nil; return end
+        end
+        if (key == "walk" or key == "run") and speed then pcall(function() track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6)) end) end
+    end
+
+    local function playLocomotion(speed)
+        lastSpeed = speed or lastSpeed
+        if lastSpeed > 0.5 then
+            local walkSpeed = math.max(humanoid.WalkSpeed, 1)
+            if lastSpeed < walkSpeed * 0.8 then play("walk", lastSpeed) else play("run", lastSpeed) end
+        else
+            play("idle")
+        end
+    end
+
+    table.insert(connections, humanoid.Running:Connect(function(speed)
+        lastSpeed = speed
+        if not specialState then playLocomotion(speed) end
+    end))
+
+    table.insert(connections, humanoid.StateChanged:Connect(function(_, newState)
+        if newState == Enum.HumanoidStateType.Jumping then specialState = "jump"; play("jump")
+        elseif newState == Enum.HumanoidStateType.Freefall then specialState = "fall"; play("fall")
+        elseif newState == Enum.HumanoidStateType.Climbing then specialState = "climb"; play("climb")
+        elseif newState == Enum.HumanoidStateType.Swimming then specialState = "swim"; play("swim")
+        elseif newState == Enum.HumanoidStateType.Seated then specialState = "seated"; stopOtherTracks(nil); currentKey = nil
+        elseif newState == Enum.HumanoidStateType.Dead then
+            specialState = "dead"
+            for _, track in pairs(tracks) do pcall(function() track:Stop(0.1) end) end
+            currentKey = nil
+        elseif newState == Enum.HumanoidStateType.Landed or newState == Enum.HumanoidStateType.Running or newState == Enum.HumanoidStateType.RunningNoPhysics or newState == Enum.HumanoidStateType.GettingUp then
+            specialState = nil; playLocomotion(lastSpeed)
+        end
+    end))
+
+    playLocomotion(0)
+    return controller, loadedCount
+end
+
+--==================================================
+-- APPLY AVATAR CORE
+--==================================================
 local function applyAvatar(username)
     if applying then return end
 
@@ -593,97 +792,91 @@ local function applyAvatar(username)
     local sourceModel
     local sourceDescription
 
-    local character
-    local humanoid
-    local previousScaleState
-    local freezeState
-
-    local scalesChanged = false
-    local originalHidden = false
-
+    local character, humanoid
     local success, err = pcall(function()
         character, humanoid = getPlayerCharacter()
-        if not character or not humanoid then error("Your character must be R15 and fully loaded.") end
-
-        previousScaleState = captureScaleState(humanoid)
+        if not character or not humanoid then error("Character must be R15 fully loaded.") end
 
         local userId = Players:GetUserIdFromNameAsync(username)
         sourceDescription = Players:GetHumanoidDescriptionFromUserIdAsync(userId)
-        if not sourceDescription then error("Could not load target avatar description.") end
+        if not sourceDescription then error("Could not load target description.") end
 
         sourceModel = Players:CreateHumanoidModelFromDescriptionAsync(sourceDescription, Enum.HumanoidRigType.R15)
-        if not sourceModel then error("Could not create the target R15 rig.") end
-
-        for _, partName in ipairs(BODY_PART_NAMES) do
-            if not getBodyPart(sourceModel, partName) then error("Target rig is missing part: " .. partName) end
-        end
-
-        local currentCharacter, currentHumanoid = getPlayerCharacter()
-        if currentCharacter ~= character or currentHumanoid ~= humanoid then error("Your character changed during loading.") end
+        if not sourceModel then error("Could not create target rig.") end
 
         removePreviousOverlay()
-        freezeState = neutralizePlayer(character, humanoid)
-        
+
         applyScaleFromDescription(humanoid, sourceDescription)
-        scalesChanged = true
 
-        RunService.Heartbeat:Wait()
-        RunService.Heartbeat:Wait()
+        local rootPlayer = character:WaitForChild("HumanoidRootPart")
+        local rootOverlay = sourceModel:WaitForChild("HumanoidRootPart")
+        local weld = Instance.new("Weld")
+        weld.Name = "OverlayRootWeld"
+        weld.Part0 = rootPlayer
+        weld.Part1 = rootOverlay
+        weld.C0 = CFrame.new()
+        weld.C1 = CFrame.new()
+        weld.Parent = rootOverlay
 
-        for _, object in ipairs(character:GetDescendants()) do
-            if object:IsA("Motor6D") then pcall(function() object.Transform = CFrame.identity end) end
+        for _, obj in ipairs(sourceModel:GetDescendants()) do
+            if obj:IsA("BasePart") then
+                obj.CanCollide = false
+                obj.CanTouch = false
+                obj.CanQuery = false
+                obj.Massless = true
+                obj.CastShadow = false
+            end
+        end
+        
+        local overlayHumanoid = sourceModel:FindFirstChildOfClass("Humanoid")
+        if overlayHumanoid then
+            overlayHumanoid.EvaluateStateMachine = false
+            overlayHumanoid.AutoRotate = false; overlayHumanoid.WalkSpeed = 0; overlayHumanoid.JumpPower = 0; overlayHumanoid.JumpHeight = 0
         end
 
-        RunService.Heartbeat:Wait()
-
-        if LocalPlayer.Character ~= character or not character.Parent then error("Your character changed while applying scale.") end
-
         sourceModel.Name = OVERLAY_NAME
-        local matchedParts = alignOverlayParts(sourceModel, character)
-        local weldCount = weldOverlay(matchedParts, sourceModel)
-
         sourceModel.Parent = character
         activeOverlay = sourceModel
 
+        local pMotors, oMotors = {}, {}
+        for _, v in ipairs(character:GetDescendants()) do if v:IsA("Motor6D") then pMotors[v.Name] = v end end
+        for _, v in ipairs(sourceModel:GetDescendants()) do if v:IsA("Motor6D") then oMotors[v.Name] = v end end
+
+        activeMotorSync = RunService.RenderStepped:Connect(function()
+            for name, pMotor in pairs(pMotors) do
+                if oMotors[name] then oMotors[name].Transform = pMotor.Transform end
+            end
+        end)
+
         hideOriginalCharacter(character, sourceModel)
-        originalHidden = true
-        restorePlayerAfterWeld(freezeState)
 
-        local controller, animationCount = createAnimationController(character, humanoid, sourceDescription, freezeState)
-
-        if not controller and freezeState.AnimateScript and freezeState.AnimateScript.Parent then
-            pcall(function() freezeState.AnimateScript.Enabled = freezeState.AnimateWasEnabled end)
+        local animateScript = character:FindFirstChild("Animate")
+        local animateWasEnabled = false
+        if animateScript and (animateScript:IsA("LocalScript") or animateScript:IsA("Script")) then
+            animateWasEnabled = animateScript.Enabled
+            animateScript.Enabled = false
         end
 
-        local walkSpeed = humanoid.WalkSpeed
-        setStatus("Welds: " .. weldCount .. " | Animations loaded: " .. animationCount .. " | WalkSpeed: " .. tostring(walkSpeed))
+        local freezeState = { AnimateScript = animateScript, AnimateWasEnabled = animateWasEnabled }
+        local controller, animationCount = createAnimationController(character, humanoid, sourceDescription, freezeState)
+
+        setStatus("Setup complete | Animations loaded: " .. animationCount .. " | Layered Clothes OK")
     end)
 
     if not success then
-        cleanupAnimationController(true)
-        if sourceModel then pcall(function() sourceModel:Destroy() end) end
-        if activeOverlay == sourceModel then activeOverlay = nil end
-        if originalHidden then restoreOriginalVisibility() end
-        if scalesChanged and humanoid and previousScaleState then restoreScaleState(humanoid, previousScaleState) end
-        if freezeState then
-            restorePlayerAfterWeld(freezeState)
-            if freezeState.AnimateScript and freezeState.AnimateScript.Parent and freezeState.AnimateWasEnabled ~= nil then
-                pcall(function() freezeState.AnimateScript.Enabled = freezeState.AnimateWasEnabled end)
-            end
-        end
+        removePreviousOverlay()
         setStatus("Error: " .. tostring(err))
     end
-
     if sourceDescription then pcall(function() sourceDescription:Destroy() end) end
 
     applying = false
     if applyButton and applyButton.Parent then applyButton.Text = "Apply Avatar" end
 end
 
-applyButton.MouseButton1Click:Connect(function()
-    lastUsername = input.Text
-    applyAvatar(lastUsername)
-end)
+--==================================================
+-- BUTTON EVENTS
+--==================================================
+applyButton.MouseButton1Click:Connect(function() lastUsername = input.Text; applyAvatar(lastUsername) end)
 
 respawnButton.MouseButton1Click:Connect(function()
     applyOnRespawn = not applyOnRespawn
@@ -693,13 +886,11 @@ respawnButton.MouseButton1Click:Connect(function()
 end)
 
 LocalPlayer.CharacterAdded:Connect(function()
-    cleanupAnimationController(true)
-    activeOverlay = nil
-    table.clear(hiddenOriginals)
+    removePreviousOverlay()
     if applyOnRespawn and lastUsername ~= "" then
         task.wait(2)
         applyAvatar(lastUsername)
     end
 end)
 
-setStatus("Ready. Tap A to hide/show this window.")
+setStatus("Ready. Tap A to hide/show.")
