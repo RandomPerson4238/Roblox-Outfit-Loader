@@ -1,6 +1,3 @@
-
--- Local visual overlay, using the player's original rig for movement.
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
@@ -18,22 +15,11 @@ local activeAnimationController
 local hiddenOriginals = {}
 
 local BODY_PART_NAMES = {
-    "HumanoidRootPart",
-    "Head",
-    "UpperTorso",
-    "LowerTorso",
-    "LeftUpperArm",
-    "LeftLowerArm",
-    "LeftHand",
-    "RightUpperArm",
-    "RightLowerArm",
-    "RightHand",
-    "LeftUpperLeg",
-    "LeftLowerLeg",
-    "LeftFoot",
-    "RightUpperLeg",
-    "RightLowerLeg",
-    "RightFoot",
+    "HumanoidRootPart", "Head", "UpperTorso", "LowerTorso",
+    "LeftUpperArm", "LeftLowerArm", "LeftHand",
+    "RightUpperArm", "RightLowerArm", "RightHand",
+    "LeftUpperLeg", "LeftLowerLeg", "LeftFoot",
+    "RightUpperLeg", "RightLowerLeg", "RightFoot",
 }
 
 local SCALE_MAP = {
@@ -45,16 +31,19 @@ local SCALE_MAP = {
     BodyProportionScale = "ProportionScale",
 }
 
---==================================================
--- GUI SETUP
---==================================================
+local ANIMATION_PROPERTIES = {
+    idle = "IdleAnimation",
+    walk = "WalkAnimation",
+    run = "RunAnimation",
+    jump = "JumpAnimation",
+    fall = "FallAnimation",
+    climb = "ClimbAnimation",
+    swim = "SwimAnimation",
+}
 
 local playerGui = LocalPlayer:WaitForChild("PlayerGui")
-
 local oldGui = playerGui:FindFirstChild(GUI_NAME)
-if oldGui then
-    oldGui:Destroy()
-end
+if oldGui then oldGui:Destroy() end
 
 local gui = Instance.new("ScreenGui")
 gui.Name = GUI_NAME
@@ -214,10 +203,6 @@ end)
 
 updateRespawnButton()
 
---==================================================
--- CHARACTER HELPERS
---==================================================
-
 local function getBodyPart(model, name)
     if not model then return nil end
     local part = model:FindFirstChild(name, true)
@@ -235,10 +220,6 @@ local function getPlayerCharacter()
     if not root or not head then return nil end
     return character, humanoid
 end
-
---==================================================
--- SCALE & VISIBILITY HELPERS
---==================================================
 
 local function captureScaleState(humanoid)
     local result = { AutomaticScalingEnabled = humanoid.AutomaticScalingEnabled, Values = {} }
@@ -343,10 +324,6 @@ local function hideOriginalCharacter(character, overlay)
     end
 end
 
---==================================================
--- WELDING AND PHYSICS
---==================================================
-
 local function neutralizePlayer(character, humanoid)
     local root = getBodyPart(character, "HumanoidRootPart")
     if not root then error("HumanoidRootPart is missing.") end
@@ -445,11 +422,26 @@ local function weldOverlay(matchedParts, overlay)
     return weldCount
 end
 
---==================================================
--- CUSTOM ANIMATION CONTROLLER (FIXED TO READ TRUE ANIMATIONCLIP IDs)
---==================================================
+local function resolveRealAnimationId(catalogId)
+    local numId = tonumber(tostring(catalogId):match("%d+"))
+    if not numId or numId <= 0 then return nil end
 
-local function createAnimationController(character, humanoid, animFolder, freezeState)
+    local realId = nil
+    pcall(function()
+        local objects = game:GetObjects("rbxassetid://" .. tostring(numId))
+        if objects and objects[1] then
+            local animObj = objects[1]:FindFirstChildWhichIsA("Animation", true)
+            if animObj and animObj.AnimationId then
+                realId = animObj.AnimationId:match("%d+")
+            end
+            objects[1]:Destroy()
+        end
+    end)
+
+    return realId or tostring(numId)
+end
+
+local function createAnimationController(character, humanoid, description, freezeState)
     local animator = humanoid:FindFirstChildOfClass("Animator")
     if not animator then
         animator = Instance.new("Animator")
@@ -481,25 +473,14 @@ local function createAnimationController(character, humanoid, animFolder, freeze
 
     local loadedCount = 0
 
-    local function loadTrack(key)
-        if not animFolder then return end
-        
-        -- Các thư mục animation trong R15Anim thường được đặt tên viết thường (idle, walk, run...)
-        local stateDir = animFolder:FindFirstChild(key)
-        if not stateDir then return end
-        
-        local animSource = stateDir:FindFirstChildOfClass("Animation")
-        if not animSource or not animSource.AnimationId then return end
-        
-        -- Lọc ra ID số thực sự của cuộn băng (AnimationClip ID)
-        local match = animSource.AnimationId:match("%d+")
-        if not match then return end
-        
-        local animationId = tonumber(match)
+    local function loadTrack(key, propertyName)
+        local rawProp = description[propertyName]
+        local realAnimId = resolveRealAnimationId(rawProp)
+        if not realAnimId then return end
 
         local animation = Instance.new("Animation")
         animation.Name = "LocalAvatar_" .. key
-        animation.AnimationId = "rbxassetid://" .. tostring(animationId)
+        animation.AnimationId = "rbxassetid://" .. realAnimId
         animation.Parent = character
 
         table.insert(animationObjects, animation)
@@ -514,12 +495,10 @@ local function createAnimationController(character, humanoid, animFolder, freeze
         loadedCount += 1
     end
 
-    -- Khởi tạo tracks dựa theo danh sách priorities
-    for key, _ in pairs(priorities) do
-        loadTrack(key)
+    for key, propertyName in pairs(ANIMATION_PROPERTIES) do
+        loadTrack(key, propertyName)
     end
 
-    -- Nếu không có custom animation nào thì trả lại script mặc định
     if loadedCount == 0 then
         for _, animation in ipairs(animationObjects) do pcall(function() animation:Destroy() end) end
         if freezeState.AnimateScript and freezeState.AnimateScript.Parent and freezeState.AnimateWasEnabled ~= nil then
@@ -589,584 +568,23 @@ local function createAnimationController(character, humanoid, animFolder, freeze
         elseif newState == Enum.HumanoidStateType.Swimming then specialState = "swim"; play("swim")
         elseif newState == Enum.HumanoidStateType.Seated then specialState = "seated"; stopOtherTracks(nil); currentKey = nil
         elseif newState == Enum.HumanoidStateType.Dead then
-                       if value then
-                    value:Destroy()
-                end
-
-                value = Instance.new("NumberValue")
-                value.Name = scaleName
-                value.Parent = humanoid
-            end
-
-            value.Value = targetValue
+            specialState = "dead"
+            for _, track in pairs(tracks) do pcall(function() track:Stop(0.1) end) end
+            currentKey = nil
+        elseif newState == Enum.HumanoidStateType.Landed or newState == Enum.HumanoidStateType.Running or newState == Enum.HumanoidStateType.RunningNoPhysics or newState == Enum.HumanoidStateType.GettingUp then
+            specialState = nil; playLocomotion(lastSpeed)
         end
-    end
-end
+    end))
 
---==================================================
--- ORIGINAL VISIBILITY / CLEANUP
---==================================================
-
-local function restoreOriginalVisibility()
-    for object, oldTransparency in pairs(hiddenOriginals) do
-        if object and object.Parent then
-            pcall(function()
-                object.Transparency = oldTransparency
-            end)
-        end
-    end
-
-    table.clear(hiddenOriginals)
-end
-
-local function cleanupAnimationController(restoreAnimate)
-    local controller = activeAnimationController
-
-    if not controller then
-        return
-    end
-
-    for _, connection in ipairs(controller.Connections) do
-        pcall(function()
-            connection:Disconnect()
-        end)
-    end
-
-    for _, track in pairs(controller.Tracks) do
-        pcall(function()
-            track:Stop(0.1)
-            track:Destroy()
-        end)
-    end
-
-    for _, animation in ipairs(controller.Animations) do
-        pcall(function()
-            animation:Destroy()
-        end)
-    end
-
-    if restoreAnimate
-        and controller.AnimateScript
-        and controller.AnimateScript.Parent then
-
-        pcall(function()
-            controller.AnimateScript.Enabled =
-                controller.AnimateWasEnabled
-        end)
-    end
-
-    activeAnimationController = nil
-end
-
-local function removePreviousOverlay()
-    cleanupAnimationController(true)
-
-    if activeOverlay then
-        pcall(function()
-            activeOverlay:Destroy()
-        end)
-
-        activeOverlay = nil
-    end
-
-    local character = LocalPlayer.Character
-
-    if character then
-        local old = character:FindFirstChild(OVERLAY_NAME)
-
-        if old then
-            old:Destroy()
-        end
-    end
-
-    restoreOriginalVisibility()
-end
-
-local function hideOriginalCharacter(character, overlay)
-    for _, object in ipairs(character:GetDescendants()) do
-        if not object:IsDescendantOf(overlay) then
-            if object:IsA("BasePart")
-                or object:IsA("Decal")
-                or object:IsA("Texture") then
-
-                if hiddenOriginals[object] == nil then
-                    hiddenOriginals[object] = object.Transparency
-                end
-
-                object.Transparency = 1
-            end
-        end
-    end
-end
-
---==================================================
--- FREEZE AND NEUTRALIZE PLAYER BEFORE WELDING
---==================================================
-
-local function neutralizePlayer(character, humanoid)
-    local root = getBodyPart(character, "HumanoidRootPart")
-
-    if not root then
-        error("HumanoidRootPart is missing.")
-    end
-
-    local animateScript = character:FindFirstChild("Animate")
-    local animateWasEnabled = nil
-
-    if animateScript and
-        (animateScript:IsA("LocalScript") or animateScript:IsA("Script")) then
-
-        animateWasEnabled = animateScript.Enabled
-        animateScript.Enabled = false
-    end
-
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-
-    if animator then
-        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-            pcall(function()
-                track:Stop(0)
-            end)
-        end
-    end
-
-    -- Save the actual physical state so it can be restored later.
-    local freezeState = {
-        Root = root,
-        WasAnchored = root.Anchored,
-        LinearVelocity = root.AssemblyLinearVelocity,
-        AngularVelocity = root.AssemblyAngularVelocity,
-        AnimateScript = animateScript,
-        AnimateWasEnabled = animateWasEnabled,
-    }
-
-    -- Prevent movement while the character is being put into a neutral pose.
-    root.Anchored = true
-
-    -- Reset the player's Motor6D animation transforms, but do not destroy
-    -- or reconfigure any player joints.
-    for _, object in ipairs(character:GetDescendants()) do
-        if object:IsA("Motor6D") then
-            pcall(function()
-                object.Transform = CFrame.identity
-            end)
-        end
-    end
-
-    RunService.Heartbeat:Wait()
-    RunService.Heartbeat:Wait()
-
-    return freezeState
-end
-
-local function restorePlayerAfterWeld(freezeState)
-    if not freezeState then
-        return
-    end
-
-    local root = freezeState.Root
-
-    if root and root.Parent then
-        root.Anchored = freezeState.WasAnchored
-
-        if not root.Anchored then
-            pcall(function()
-                root.AssemblyLinearVelocity =
-                    freezeState.LinearVelocity
-
-                root.AssemblyAngularVelocity =
-                    freezeState.AngularVelocity
-            end)
-        end
-    end
-end
-
-local function restoreAnimateAfterFailure(freezeState)
-    if not freezeState then
-        return
-    end
-
-    local animateScript = freezeState.AnimateScript
-
-    if animateScript and animateScript.Parent
-        and freezeState.AnimateWasEnabled ~= nil then
-
-        pcall(function()
-            animateScript.Enabled = freezeState.AnimateWasEnabled
-        end)
-    end
-end
-
---==================================================
--- ALIGN AND WELD THE SECONDARY RIG
---==================================================
-
-local function alignOverlayParts(overlay, character)
-    local matched = {}
-
-    for _, partName in ipairs(BODY_PART_NAMES) do
-        local playerPart = getBodyPart(character, partName)
-        local overlayPart = getBodyPart(overlay, partName)
-
-        if playerPart and overlayPart then
-            -- The player is in neutral pose and temporarily anchored.
-            overlayPart.CFrame = playerPart.CFrame
-
-            table.insert(matched, {
-                Name = partName,
-                PlayerPart = playerPart,
-                OverlayPart = overlayPart,
-            })
-        end
-    end
-
-    if #matched == 0 then
-        error("No matching R15 body parts were found.")
-    end
-
-    return matched
-end
-
-local function weldOverlay(matchedParts, overlay)
-    local weldCount = 0
-
-    -- FIRST: create every weld.
-    -- Part0 = player part.
-    -- Part1 = corresponding target-avatar part.
-    for _, pair in ipairs(matchedParts) do
-        local playerPart = pair.PlayerPart
-        local overlayPart = pair.OverlayPart
-
-        local weld = Instance.new("Weld")
-        weld.Name = "LocalAvatarWeld_" .. pair.Name
-        weld.Part0 = playerPart
-        weld.Part1 = overlayPart
-        weld.C0 = playerPart.CFrame:ToObjectSpace(overlayPart.CFrame)
-        weld.C1 = CFrame.identity
-        weld.Parent = overlayPart
-
-        weldCount += 1
-    end
-
-    -- SECOND: keep Motor6Ds present, but disable them on the overlay
-    -- so they do not compete with the new welds.
-    -- Player Motor6Ds are NOT modified here.
-    for _, object in ipairs(overlay:GetDescendants()) do
-        if object:IsA("Motor6D") then
-            object.Enabled = false
-        end
-    end
-
-    -- THIRD: after all the welds exist, disable overlay collisions.
-    -- The model is still outside the live character, so it cannot fall.
-    for _, object in ipairs(overlay:GetDescendants()) do
-        if object:IsA("BasePart") then
-            object.CanCollide = false
-            object.CanTouch = false
-            object.CanQuery = false
-            object.Massless = true
-            object.Anchored = false
-        end
-    end
-
-    -- Disable the overlay Humanoid's independent state machine if available.
-    local overlayHumanoid = overlay:FindFirstChildOfClass("Humanoid")
-
-    if overlayHumanoid then
-        pcall(function()
-            overlayHumanoid.EvaluateStateMachine = false
-        end)
-
-        pcall(function()
-            overlayHumanoid.AutoRotate = false
-            overlayHumanoid.WalkSpeed = 0
-            overlayHumanoid.JumpPower = 0
-            overlayHumanoid.JumpHeight = 0
-        end)
-    end
-
-    return weldCount
-end
-
---==================================================
--- CUSTOM ANIMATION CONTROLLER
---==================================================
-
-local function getAnimationId(description, propertyName)
-    local value = tonumber(description[propertyName])
-
-    if not value or value <= 0 then
-        return nil
-    end
-
-    return math.floor(value)
-end
-
-local function createAnimationController(
-    character,
-    humanoid,
-    description,
-    freezeState
-)
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-
-    if not animator then
-        animator = Instance.new("Animator")
-        animator.Parent = humanoid
-    end
-
-    local tracks = {}
-    local animationObjects = {}
-    local connections = {}
-
-    local controller = {
-        Tracks = tracks,
-        Animations = animationObjects,
-        Connections = connections,
-        AnimateScript = freezeState.AnimateScript,
-        AnimateWasEnabled = freezeState.AnimateWasEnabled,
-        Humanoid = humanoid,
-    }
-
-    local priorities = {
-        idle = Enum.AnimationPriority.Idle,
-        walk = Enum.AnimationPriority.Movement,
-        run = Enum.AnimationPriority.Movement,
-        jump = Enum.AnimationPriority.Action,
-        fall = Enum.AnimationPriority.Action,
-        climb = Enum.AnimationPriority.Action,
-        swim = Enum.AnimationPriority.Action,
-    }
-
-    local loadedCount = 0
-
-    local function loadTrack(key, propertyName)
-        local animationId = getAnimationId(description, propertyName)
-
-        if not animationId then
-            return
-        end
-
-        local animation = Instance.new("Animation")
-        animation.Name = "LocalAvatar_" .. key
-        animation.AnimationId = "rbxassetid://" .. tostring(animationId)
-        animation.Parent = character
-
-        table.insert(animationObjects, animation)
-
-        local ok, track = pcall(function()
-            return animator:LoadAnimation(animation)
-        end)
-
-        if not ok or not track then
-            return
-        end
-
-        track.Priority = priorities[key] or Enum.AnimationPriority.Movement
-        track.Looped = key ~= "jump"
-
-        tracks[key] = track
-        loadedCount += 1
-    end
-
-    for key, propertyName in pairs(ANIMATION_PROPERTIES) do
-        loadTrack(key, propertyName)
-    end
-
-    -- If no target tracks were loaded, restore the original Animate script
-    -- rather than leaving the character without animations.
-    if loadedCount == 0 then
-        for _, animation in ipairs(animationObjects) do
-            pcall(function()
-                animation:Destroy()
-            end)
-        end
-
-        if freezeState.AnimateScript
-            and freezeState.AnimateScript.Parent
-            and freezeState.AnimateWasEnabled ~= nil then
-
-            freezeState.AnimateScript.Enabled =
-                freezeState.AnimateWasEnabled
-        end
-
-        return nil, 0
-    end
-
-    activeAnimationController = controller
-
-    local currentKey = nil
-    local specialState = nil
-    local lastSpeed = 0
-
-    local function stopOtherTracks(exceptKey)
-        for key, track in pairs(tracks) do
-            if key ~= exceptKey and track.IsPlaying then
-                pcall(function()
-                    track:Stop(0.12)
-                end)
-            end
-        end
-    end
-
-    local function play(key, speed)
-        local track = tracks[key]
-
-        -- Fallbacks when a pack omits a specific category.
-        if not track and key == "run" then
-            track = tracks.walk
-            key = track and "walk" or key
-        end
-
-        if not track and key == "walk" then
-            track = tracks.run
-            key = track and "run" or key
-        end
-
-        if not track and (key == "jump" or key == "fall") then
-            track = tracks.idle or tracks.walk or tracks.run
-        end
-
-        if not track and key == "swim" then
-            track = tracks.walk or tracks.idle
-        end
-
-        if not track and key == "climb" then
-            track = tracks.walk or tracks.idle
-        end
-
-        if not track then
-            return
-        end
-
-        if currentKey == key and track.IsPlaying then
-            if (key == "walk" or key == "run") and speed then
-                pcall(function()
-                    track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6))
-                end)
-            end
-
-            return
-        end
-
-        stopOtherTracks(key)
-
-        currentKey = key
-
-        if not track.IsPlaying then
-            local ok = pcall(function()
-                track:Play(0.12, 1, 1)
-            end)
-
-            if not ok then
-                currentKey = nil
-                return
-            end
-        end
-
-        if (key == "walk" or key == "run") and speed then
-            pcall(function()
-                track:AdjustSpeed(math.clamp(speed / 16, 0.65, 1.6))
-            end)
-        end
-    end
-
-    local function playLocomotion(speed)
-        lastSpeed = speed or lastSpeed
-
-        if lastSpeed > 0.5 then
-            local walkSpeed = math.max(humanoid.WalkSpeed, 1)
-
-            if lastSpeed < walkSpeed * 0.8 then
-                play("walk", lastSpeed)
-            else
-                play("run", lastSpeed)
-            end
-        else
-            play("idle")
-        end
-    end
-
-    table.insert(
-        connections,
-        humanoid.Running:Connect(function(speed)
-            lastSpeed = speed
-
-            if not specialState then
-                playLocomotion(speed)
-            end
-        end)
-    )
-
-    table.insert(
-        connections,
-        humanoid.StateChanged:Connect(function(_, newState)
-            if newState == Enum.HumanoidStateType.Jumping then
-                specialState = "jump"
-                play("jump")
-
-            elseif newState == Enum.HumanoidStateType.Freefall then
-                specialState = "fall"
-                play("fall")
-
-            elseif newState == Enum.HumanoidStateType.Climbing then
-                specialState = "climb"
-                play("climb")
-
-            elseif newState == Enum.HumanoidStateType.Swimming then
-                specialState = "swim"
-                play("swim")
-
-            elseif newState == Enum.HumanoidStateType.Seated then
-                specialState = "seated"
-                stopOtherTracks(nil)
-                currentKey = nil
-
-            elseif newState == Enum.HumanoidStateType.Dead then
-                specialState = "dead"
-
-                for _, track in pairs(tracks) do
-                    pcall(function()
-                        track:Stop(0.1)
-                    end)
-                end
-
-                currentKey = nil
-
-            elseif newState == Enum.HumanoidStateType.Landed
-                or newState == Enum.HumanoidStateType.Running
-                or newState == Enum.HumanoidStateType.RunningNoPhysics
-                or newState == Enum.HumanoidStateType.GettingUp then
-
-                specialState = nil
-                playLocomotion(lastSpeed)
-            end
-        end)
-    )
-
-    -- Start with idle if possible; otherwise use locomotion fallback.
     playLocomotion(0)
-
     return controller, loadedCount
 end
 
---==================================================
--- APPLY AVATAR
---==================================================
-
 local function applyAvatar(username)
-    if applying then
-        return
-    end
+    if applying then return end
 
-    username = tostring(username or "")
-        :gsub("^%s+", "")
-        :gsub("%s+$", "")
-
-    if username == "" then
-        setStatus("Enter a username first.")
-        return
-    end
+    username = tostring(username or ""):gsub("^%s+", ""):gsub("%s+$", "")
+    if username == "" then setStatus("Enter a username first."); return end
 
     applying = true
     applyButton.Text = "Loading..."
@@ -1182,174 +600,85 @@ local function applyAvatar(username)
 
     local scalesChanged = false
     local originalHidden = false
-    local overlayParented = false
 
     local success, err = pcall(function()
         character, humanoid = getPlayerCharacter()
-
-        if not character or not humanoid then
-            error("Your character must be R15 and fully loaded.")
-        end
+        if not character or not humanoid then error("Your character must be R15 and fully loaded.") end
 
         previousScaleState = captureScaleState(humanoid)
 
         local userId = Players:GetUserIdFromNameAsync(username)
+        sourceDescription = Players:GetHumanoidDescriptionFromUserIdAsync(userId)
+        if not sourceDescription then error("Could not load target avatar description.") end
 
-        sourceDescription =
-            Players:GetHumanoidDescriptionFromUserIdAsync(userId)
-
-        if not sourceDescription then
-            error("Could not load target avatar description.")
-        end
-
-        sourceModel =
-            Players:CreateHumanoidModelFromDescriptionAsync(
-                sourceDescription,
-                Enum.HumanoidRigType.R15
-            )
-
-        if not sourceModel then
-            error("Could not create the target R15 rig.")
-        end
+        sourceModel = Players:CreateHumanoidModelFromDescriptionAsync(sourceDescription, Enum.HumanoidRigType.R15)
+        if not sourceModel then error("Could not create the target R15 rig.") end
 
         for _, partName in ipairs(BODY_PART_NAMES) do
-            if not getBodyPart(sourceModel, partName) then
-                error("Target rig is missing part: " .. partName)
-            end
+            if not getBodyPart(sourceModel, partName) then error("Target rig is missing part: " .. partName) end
         end
 
         local currentCharacter, currentHumanoid = getPlayerCharacter()
+        if currentCharacter ~= character or currentHumanoid ~= humanoid then error("Your character changed during loading.") end
 
-        if currentCharacter ~= character or currentHumanoid ~= humanoid then
-            error("Your character changed during loading.")
-        end
-
-        -- Remove the old overlay only after the new target loaded.
         removePreviousOverlay()
-
-        -- Freeze and neutralize the DRIVER RIG before creating welds.
         freezeState = neutralizePlayer(character, humanoid)
-
-        -- Apply target proportions to the driver rig while animation is paused.
+        
         applyScaleFromDescription(humanoid, sourceDescription)
         scalesChanged = true
 
         RunService.Heartbeat:Wait()
         RunService.Heartbeat:Wait()
 
-        -- Scaling may have altered part positions; return joints to bind pose
-        -- again before calculating the overlay weld offsets.
         for _, object in ipairs(character:GetDescendants()) do
-            if object:IsA("Motor6D") then
-                pcall(function()
-                    object.Transform = CFrame.identity
-                end)
-            end
+            if object:IsA("Motor6D") then pcall(function() object.Transform = CFrame.identity end) end
         end
 
         RunService.Heartbeat:Wait()
 
-        if LocalPlayer.Character ~= character or not character.Parent then
-            error("Your character changed while applying scale.")
-        end
+        if LocalPlayer.Character ~= character or not character.Parent then error("Your character changed while applying scale.") end
 
-        -- The avatar model was built from the target description, so its body
-        -- geometry and proportions come from the target avatar.
         sourceModel.Name = OVERLAY_NAME
-
-        -- The model is not in the live character yet, so it cannot fall.
-        -- Align each matching part in the driver's neutral pose.
         local matchedParts = alignOverlayParts(sourceModel, character)
-
-        -- Create welds first, then disable collision. Keep Motor6D instances.
         local weldCount = weldOverlay(matchedParts, sourceModel)
 
-        -- Parent only after the joints and collision properties are ready.
         sourceModel.Parent = character
-        overlayParented = true
         activeOverlay = sourceModel
 
-        -- Hide the original player's parts, face, and old accessories.
         hideOriginalCharacter(character, sourceModel)
         originalHidden = true
-
-        -- Restore the driver's physical state before starting animations.
         restorePlayerAfterWeld(freezeState)
 
-        local controller, animationCount =
-            createAnimationController(
-                character,
-                humanoid,
-                sourceDescription,
-                freezeState
-            )
+        local controller, animationCount = createAnimationController(character, humanoid, sourceDescription, freezeState)
 
-        -- If the custom animation pack could not load, use the regular
-        -- Animate script if one exists.
-        if not controller and freezeState.AnimateScript
-            and freezeState.AnimateScript.Parent then
-
-            pcall(function()
-                freezeState.AnimateScript.Enabled =
-                    freezeState.AnimateWasEnabled
-            end)
+        if not controller and freezeState.AnimateScript and freezeState.AnimateScript.Parent then
+            pcall(function() freezeState.AnimateScript.Enabled = freezeState.AnimateWasEnabled end)
         end
 
         local walkSpeed = humanoid.WalkSpeed
-
-        setStatus(
-            "Welds: " .. weldCount
-            .. " | Animations loaded: " .. animationCount
-            .. " | WalkSpeed: " .. tostring(walkSpeed)
-        )
+        setStatus("Welds: " .. weldCount .. " | Animations loaded: " .. animationCount .. " | WalkSpeed: " .. tostring(walkSpeed))
     end)
 
     if not success then
-        -- Stop custom tracks if they were created before an error.
         cleanupAnimationController(true)
-
-        if sourceModel then
-            pcall(function()
-                sourceModel:Destroy()
-            end)
-        end
-
-        if activeOverlay == sourceModel then
-            activeOverlay = nil
-        end
-
-        if originalHidden then
-            restoreOriginalVisibility()
-        end
-
-        if scalesChanged and humanoid and previousScaleState then
-            restoreScaleState(humanoid, previousScaleState)
-        end
-
+        if sourceModel then pcall(function() sourceModel:Destroy() end) end
+        if activeOverlay == sourceModel then activeOverlay = nil end
+        if originalHidden then restoreOriginalVisibility() end
+        if scalesChanged and humanoid and previousScaleState then restoreScaleState(humanoid, previousScaleState) end
         if freezeState then
             restorePlayerAfterWeld(freezeState)
-            restoreAnimateAfterFailure(freezeState)
+            if freezeState.AnimateScript and freezeState.AnimateScript.Parent and freezeState.AnimateWasEnabled ~= nil then
+                pcall(function() freezeState.AnimateScript.Enabled = freezeState.AnimateWasEnabled end)
+            end
         end
-
         setStatus("Error: " .. tostring(err))
     end
 
-    if sourceDescription then
-        pcall(function()
-            sourceDescription:Destroy()
-        end)
-    end
+    if sourceDescription then pcall(function() sourceDescription:Destroy() end) end
 
     applying = false
-
-    if applyButton and applyButton.Parent then
-        applyButton.Text = "Apply Avatar"
-    end
+    if applyButton and applyButton.Parent then applyButton.Text = "Apply Avatar" end
 end
-
---==================================================
--- BUTTONS / RESPAWN
---==================================================
 
 applyButton.MouseButton1Click:Connect(function()
     lastUsername = input.Text
@@ -1359,23 +688,14 @@ end)
 respawnButton.MouseButton1Click:Connect(function()
     applyOnRespawn = not applyOnRespawn
     lastUsername = input.Text
-
     updateRespawnButton()
-
-    setStatus(
-        applyOnRespawn
-            and "Respawn apply enabled."
-            or "Respawn apply disabled."
-    )
+    setStatus(applyOnRespawn and "Respawn apply enabled." or "Respawn apply disabled.")
 end)
 
 LocalPlayer.CharacterAdded:Connect(function()
     cleanupAnimationController(true)
-
-    -- The previous character and overlay disappear on respawn.
     activeOverlay = nil
     table.clear(hiddenOriginals)
-
     if applyOnRespawn and lastUsername ~= "" then
         task.wait(2)
         applyAvatar(lastUsername)
