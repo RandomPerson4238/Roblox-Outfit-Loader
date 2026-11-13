@@ -1,4 +1,4 @@
--- R15 AVATAR CHANGER (FIXED ANIMATION CLIP IDs)
+
 -- Local visual overlay, using the player's original rig for movement.
 
 local Players = game:GetService("Players")
